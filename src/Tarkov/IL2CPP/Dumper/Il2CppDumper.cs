@@ -100,10 +100,9 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 return;
             }
 
-            // Resolve TypeInfoTableRva via signature scan. Retry with delays because
-            // the IL2CPP runtime may not have populated the table yet if the radar
-            // started before the game.
-            const int maxRvaRetries = 30;
+            // Resolve TypeInfoTableRva via signature scan. Keep the startup retry
+            // window short so a stale signature cannot block GOM fallback for minutes.
+            const int maxRvaRetries = 3;
             bool rvaResolved = false;
             for (int rvaAttempt = 1; rvaAttempt <= maxRvaRetries; rvaAttempt++)
             {
@@ -115,7 +114,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
 
                 if (rvaAttempt < maxRvaRetries)
                 {
-                    int delay = rvaAttempt <= 10 ? 1000 : 2000;
+                    const int delay = 500;
                     Logging.WriteLine($"[Il2CppDumper] TypeInfoTable not ready, retrying in {delay}ms... ({rvaAttempt}/{maxRvaRetries})");
                     Thread.Sleep(delay);
                 }
