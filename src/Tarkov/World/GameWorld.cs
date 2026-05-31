@@ -358,8 +358,10 @@ namespace LoneEftDmaRadar.Tarkov.World
                 return;
             try
             {
-                RaidStarted = localPlayer.CheckIsRaidStarted() ??
-                    throw new InvalidOperationException("Unable to get Hands Data!");
+                bool? raidStarted = localPlayer.CheckIsRaidStarted();
+                if (!raidStarted.HasValue)
+                    return;
+                RaidStarted = raidStarted.Value;
                 if (RaidStarted)
                 {
                     Logging.WriteLine("[PreRaidStartChecks] Raid has started!");

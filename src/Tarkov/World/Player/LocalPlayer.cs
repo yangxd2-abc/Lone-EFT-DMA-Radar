@@ -3,6 +3,7 @@
  * Licensed under GNU AGPLv3. See https://www.gnu.org/licenses/agpl-3.0.html
  */
 using Collections.Pooled;
+using LoneEftDmaRadar.Misc;
 using LoneEftDmaRadar.Tarkov.Unity.Collections;
 using LoneEftDmaRadar.Tarkov.Unity.Structures;
 using VmmSharpEx.Scatter;
@@ -12,6 +13,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
     public sealed class LocalPlayer : ClientPlayer
     {
         private UnityTransform _lookRaycastTransform;
+        private RateLimiter _raidStartedErrorRateLimit = new(TimeSpan.FromSeconds(5));
 
         /// <summary>
         /// Local Player's 'Look' position.
@@ -45,9 +47,10 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
         /// <returns>True if the Raid has started, otherwise false. NULL if an error occurred.</returns>
         public bool? CheckIsRaidStarted()
         {
+            ulong handsControllerAddr = this + Offsets.Player._handsController;
             try
             {
-                ulong handsController = Memory.ReadPtr(this + Offsets.Player._handsController, false);
+                ulong handsController = Memory.ReadPtr(handsControllerAddr, false);
                 string handsType = ObjectClass.ReadName(
                     objectClass: handsController,
                     useCache: false);
@@ -58,7 +61,14 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
             }
             catch (Exception ex)
             {
-                Logging.WriteLine($"[LocalPlayer] ERROR Checking IsRaidStarted: {ex}");
+                if (_raidStartedErrorRateLimit.TryEnter())
+                {
+                    Logging.WriteLine(
+                        $"[LocalPlayer] ERROR Checking IsRaidStarted: " +
+                        $"Player=0x{((ulong)this):X}, " +
+                        $"HandsControllerField=0x{handsControllerAddr:X}, " +
+                        $"Offset=0x{Offsets.Player._handsController:X}: {ex}");
+                }
                 return null;
             }
         }

@@ -23,6 +23,8 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
     /// </summary>
     public abstract class AbstractPlayer : IWorldEntity, IMapEntity, IMouseoverEntity
     {
+        private static readonly ConcurrentDictionary<ulong, DateTime> _allocationErrorLogTimes = new();
+
         /// <summary>
         /// Group ID for Solo Players.
         /// </summary>
@@ -97,7 +99,13 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
             }
             catch (Exception ex)
             {
-                Logging.WriteLine($"ERROR during Player Allocation for player @ 0x{playerBase.ToString("X")}: {ex}");
+                DateTime now = DateTime.UtcNow;
+                if (!_allocationErrorLogTimes.TryGetValue(playerBase, out DateTime lastLog) ||
+                    now - lastLog >= TimeSpan.FromSeconds(5))
+                {
+                    _allocationErrorLogTimes[playerBase] = now;
+                    Logging.WriteLine($"ERROR during Player Allocation for player @ 0x{playerBase:X}: {ex}");
+                }
             }
         }
 
@@ -339,9 +347,12 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
         {
             var rotation = Memory.ReadValue<Vector2>(rotationAddr, false);
             if (!rotation.IsNormalOrZero() ||
-                Math.Abs(rotation.X) > 360f ||
                 Math.Abs(rotation.Y) > 90f)
-                throw new ArgumentOutOfRangeException(nameof(rotationAddr));
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(rotationAddr),
+                    $"Invalid rotation at 0x{rotationAddr:X}: X={rotation.X}, Y={rotation.Y}");
+            }
 
             return rotationAddr;
         }

@@ -2,6 +2,7 @@
  * Lone EFT DMA Radar - Copyright (c) 2026 Lone DMA
  * Licensed under GNU AGPLv3. See https://www.gnu.org/licenses/agpl-3.0.html
  */
+using LoneEftDmaRadar.Misc;
 using VmmSharpEx;
 using VmmSharpEx.Extensions;
 
@@ -82,7 +83,8 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP
             }
             catch (Exception ex)
             {
-                Logging.WriteLine($"Failed to get GameWorld via IL2CPP: {ex}");
+                if (_gameWorldLookupErrorRateLimit.TryEnter())
+                    Logging.WriteLine($"Failed to get GameWorld via IL2CPP: {ex}");
                 return false;
             }
         }
@@ -97,6 +99,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP
         private static ulong gTypeInfoDefinitionTable;
         private static ulong gMetadataGlobalHeader;
         private static ulong gGlobalMetadata;
+        private static RateLimiter _gameWorldLookupErrorRateLimit = new(TimeSpan.FromSeconds(5));
 
         private static PersistentCache Cache => Program.Config.Cache;
 

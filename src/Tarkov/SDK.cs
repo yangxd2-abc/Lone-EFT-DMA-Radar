@@ -58,7 +58,7 @@ namespace SDK
             public static uint Corpse = 0x680; // object
             public static uint Location = 0x870; // string
             public static uint Profile = 0x900; // object
-            public static uint _handsController = 0x980; // object
+            public static uint _handsController = 0xA30; // object
             public static uint _playerLookRaycastTransform = 0xA10; // object
         }
 
