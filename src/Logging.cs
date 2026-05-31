@@ -5,15 +5,19 @@
 namespace LoneEftDmaRadar
 {
     /// <summary>
-    /// Integrated logging module. Enables console logging if -console startup parameter is provided.
-    /// In Debug builds, logs to Debug output if console logging is not enabled.
+    /// Integrated logging module. Enables console logging by default.
+    /// Use -noconsole to disable the console window.
     /// </summary>
     internal static partial class Logging
     {
         private static bool _useConsole;
+        private static readonly object _sync = new();
+        private static readonly Dictionary<string, DuplicateLogState> _duplicateLogStates = new(StringComparer.Ordinal);
+        private static readonly TimeSpan _duplicateLogInterval = TimeSpan.FromSeconds(5);
+        private static DateTime _lastDuplicateLogCleanup = DateTime.UtcNow;
 
         /// <summary>
-        /// <see langword="true"/> if Console Logging is enabled via -console startup parameter.
+        /// <see langword="true"/> if console logging is enabled.
         /// </summary>
         public static bool UseConsole => _useConsole;
 
@@ -21,7 +25,7 @@ namespace LoneEftDmaRadar
         internal static void ModuleInit()
         {
             var args = Environment.GetCommandLineArgs();
-            _useConsole = args?.Any(arg => arg.Equals("-console", StringComparison.OrdinalIgnoreCase)) ?? false;
+            _useConsole = !(args?.Any(arg => arg.Equals("-noconsole", StringComparison.OrdinalIgnoreCase)) ?? false);
             if (_useConsole)
             {
                 AllocConsole();
@@ -61,19 +65,73 @@ namespace LoneEftDmaRadar
         /// Writes the provided value to the Log followed by a new line.
         /// </summary>
         /// <param name="value">Value to be written to logging output.</param>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void WriteLine(object value)
         {
+            string message = value?.ToString() ?? string.Empty;
+            string[] lines = message.ReplaceLineEndings("\n").Split('\n');
+            DateTime now = DateTime.Now;
+            int suppressedCount;
+
+            lock (_sync)
+            {
+                CleanupDuplicateLogStates(now.ToUniversalTime());
+                if (_duplicateLogStates.TryGetValue(message, out DuplicateLogState state))
+                {
+                    if (now.ToUniversalTime() - state.LastWrittenUtc < _duplicateLogInterval)
+                    {
+                        state.SuppressedCount++;
+                        return;
+                    }
+                    suppressedCount = state.SuppressedCount;
+                    state.LastWrittenUtc = now.ToUniversalTime();
+                    state.SuppressedCount = 0;
+                }
+                else
+                {
+                    suppressedCount = 0;
+                    _duplicateLogStates.Add(message, new DuplicateLogState(now.ToUniversalTime()));
+                }
+            }
+
+            if (suppressedCount > 0)
+                WriteTimestampedLine(now, $"[Logging] Suppressed {suppressedCount} duplicate log entr{(suppressedCount == 1 ? "y" : "ies")}.");
+            foreach (string line in lines)
+                WriteTimestampedLine(now, line);
+        }
+
+        private static void CleanupDuplicateLogStates(DateTime nowUtc)
+        {
+            if (_duplicateLogStates.Count < 1024 ||
+                nowUtc - _lastDuplicateLogCleanup < TimeSpan.FromMinutes(1))
+                return;
+
+            _lastDuplicateLogCleanup = nowUtc;
+            foreach (var pair in _duplicateLogStates.ToArray())
+            {
+                if (nowUtc - pair.Value.LastWrittenUtc >= TimeSpan.FromMinutes(1))
+                    _ = _duplicateLogStates.Remove(pair.Key);
+            }
+        }
+
+        private static void WriteTimestampedLine(DateTime timestamp, string line)
+        {
+            string output = $"[{timestamp:yyyy-MM-dd HH:mm:ss.fff}] {line}";
             if (_useConsole)
             {
-                Console.WriteLine(value);
+                Console.WriteLine(output);
             }
 #if DEBUG
             else
             {
-                Debug.WriteLine(value);
+                Debug.WriteLine(output);
             }
 #endif
+        }
+
+        private sealed class DuplicateLogState(DateTime lastWrittenUtc)
+        {
+            public DateTime LastWrittenUtc { get; set; } = lastWrittenUtc;
+            public int SuppressedCount { get; set; }
         }
 
         private const int STD_OUTPUT_HANDLE = -11;
