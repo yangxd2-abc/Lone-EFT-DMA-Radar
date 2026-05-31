@@ -76,9 +76,9 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP
                 }
 
                 map = Memory.ReadUnityString(mapPtr, 128);
-                Logging.WriteLine("Detected Map " + map);
                 if (!TarkovDataManager.MapData.ContainsKey(map)) // Also makes sure we're not in the hideout
-                    throw new ArgumentException("Invalid Map ID!");
+                    return false;
+                Logging.WriteLine("Detected Map " + map);
                 return true;
             }
             catch (Exception ex)

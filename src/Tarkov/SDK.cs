@@ -4,13 +4,13 @@ namespace SDK
     {
         public readonly partial struct GameWorld
         {
-            public static uint BtrController = 0x20; // object
-            public static uint LocationId = 0xC8; // string
-            public static uint LootList = 0x190; // object
-            public static uint RegisteredPlayers = 0x1B0; // object
-            public static uint MainPlayer = 0x208; // object
-            public static uint SynchronizableObjectLogicProcessor = 0x240; // object
-            public static uint Grenades = 0x280; // object
+            public static uint BtrController = 0x28; // object
+            public static uint LocationId = 0xE8; // string
+            public static uint LootList = 0x1B0; // object
+            public static uint RegisteredPlayers = 0x1D0; // object
+            public static uint MainPlayer = 0x230; // object
+            public static uint SynchronizableObjectLogicProcessor = 0x270; // object
+            public static uint Grenades = 0x2B0; // object
         }
 
         public readonly partial struct SynchronizableObject
@@ -55,11 +55,11 @@ namespace SDK
             public static uint MovementContext = 0x60; // object
             public static uint _playerBody = 0x190; // object
             public static uint GameWorld = 0x5F8; // object
-            public static uint Corpse = 0x680; // object
-            public static uint Location = 0x870; // string
-            public static uint Profile = 0x900; // object
+            public static uint Corpse = 0x718; // object
+            public static uint Location = 0x918; // string
+            public static uint Profile = 0x9B0; // object
             public static uint _handsController = 0xA30; // object
-            public static uint _playerLookRaycastTransform = 0xA10; // object
+            public static uint _playerLookRaycastTransform = 0xA18; // object
         }
 
         public readonly partial struct ObservedPlayerView
@@ -114,7 +114,7 @@ namespace SDK
 
         public readonly partial struct ObservedPlayerStateContext
         {
-            public static uint Rotation = 0x20; // object
+            public static uint Rotation = 0x28; // object
         }
 
         public readonly partial struct ObservedHealthController
@@ -154,8 +154,8 @@ namespace SDK
 
         public readonly partial struct MovementContext
         {
-            public static uint _player = 0x48; // object
-            public static uint _rotation = 0xC8; // object
+            public static uint _player = 0x40; // object
+            public static uint _rotation = 0xC0; // object
         }
 
         public readonly partial struct InteractiveLootItem
