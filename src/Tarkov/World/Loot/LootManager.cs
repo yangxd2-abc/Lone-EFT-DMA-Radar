@@ -19,7 +19,8 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
         private readonly Lock _filterSync = new();
         private readonly ConcurrentDictionary<ulong, LootItem> _loot = new();
         private readonly HashSet<string> _loggedQuestItems = new(StringComparer.OrdinalIgnoreCase);
-        private readonly RateLimiter _refreshErrorRateLimit = new(TimeSpan.FromSeconds(5));
+        private RateLimiter _refreshErrorRateLimit = new(TimeSpan.FromSeconds(5));
+        private RateLimiter _scatterFallbackRateLimit = new(TimeSpan.FromSeconds(10));
 
         /// <summary>
         /// All loot (with filter applied).
@@ -193,13 +194,63 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                     }
                 };
             }
-            map.Execute(); // execute scatter read
+            try
+            {
+                map.Execute(); // execute scatter read
+            }
+            catch (Exception ex)
+            {
+                if (_scatterFallbackRateLimit.TryEnter())
+                    Logging.WriteLine($"[LootManager] Scatter loot refresh failed; falling back to sequential reads: {ex.Message}");
+                RefreshLootSequential(lootListHs, ct);
+            }
+
             // Post Scatter Read - Sync Corpses
             var deadPlayers = Memory.Players?
                 .Where(x => x.Corpse is not null)?.ToList();
             foreach (var corpse in _loot.Values.OfType<LootCorpse>())
             {
                 corpse.Sync(deadPlayers);
+            }
+        }
+
+        /// <summary>
+        /// Slower fallback path used when a scatter batch fails.
+        /// </summary>
+        private void RefreshLootSequential(IEnumerable<ulong> lootList, CancellationToken ct)
+        {
+            foreach (var lootBase in lootList)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (_loot.ContainsKey(lootBase) || !lootBase.IsValidUserVA())
+                    continue;
+
+                try
+                {
+                    var monoBehaviour = Memory.ReadPtr(lootBase + ObjectClass.MonoBehaviourOffset);
+                    var c1 = Memory.ReadPtr(lootBase + ObjectClass.To_NamePtr[0]);
+                    var interactiveClass = Memory.ReadPtr(monoBehaviour + UnityOffsets.Component_ObjectClassOffset);
+                    var gameObject = Memory.ReadPtr(monoBehaviour + UnityOffsets.Component_GameObjectOffset);
+                    var classNamePtr = Memory.ReadPtr(c1 + ObjectClass.To_NamePtr[1]);
+                    var className = Memory.ReadUtf8String(classNamePtr, 64);
+                    var components = Memory.ReadPtr(gameObject + UnityOffsets.GameObject_ComponentsOffset);
+                    var pGameObjectName = Memory.ReadPtr(gameObject + UnityOffsets.GameObject_NameOffset);
+                    var objectName = Memory.ReadUtf8String(pGameObjectName, 64);
+                    var transformInternal = Memory.ReadPtr(components + 0x8);
+
+                    var @params = new LootIndexParams
+                    {
+                        ItemBase = lootBase,
+                        InteractiveClass = interactiveClass,
+                        ObjectName = objectName,
+                        TransformInternal = transformInternal,
+                        ClassName = className
+                    };
+                    ProcessLootIndex(ref @params);
+                }
+                catch
+                {
+                }
             }
         }
 
