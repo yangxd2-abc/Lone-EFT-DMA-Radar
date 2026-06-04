@@ -3,9 +3,11 @@
  * Licensed under GNU AGPLv3. See https://www.gnu.org/licenses/agpl-3.0.html
  */
 using Collections.Pooled;
+using LoneEftDmaRadar.Misc;
 using LoneEftDmaRadar.Tarkov.Unity.Collections;
 using LoneEftDmaRadar.Tarkov.Unity.Structures;
 using LoneEftDmaRadar.UI.Loot;
+using VmmSharpEx.Extensions;
 
 namespace LoneEftDmaRadar.Tarkov.World.Loot
 {
@@ -17,6 +19,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
         private readonly Lock _filterSync = new();
         private readonly ConcurrentDictionary<ulong, LootItem> _loot = new();
         private readonly HashSet<string> _loggedQuestItems = new(StringComparer.OrdinalIgnoreCase);
+        private readonly RateLimiter _refreshErrorRateLimit = new(TimeSpan.FromSeconds(5));
 
         /// <summary>
         /// All loot (with filter applied).
@@ -77,7 +80,8 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
             }
             catch (Exception ex)
             {
-                Logging.WriteLine($"CRITICAL ERROR - Failed to refresh loot: {ex}");
+                if (_refreshErrorRateLimit.TryEnter())
+                    Logging.WriteLine($"CRITICAL ERROR - Failed to refresh loot: {ex}");
             }
         }
 
@@ -116,12 +120,18 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                 {
                     continue; // Already processed this loot item once before
                 }
+                if (!lootBase.IsValidUserVA())
+                {
+                    continue;
+                }
                 round1.PrepareReadPtr(lootBase + ObjectClass.MonoBehaviourOffset); // UnityComponent
                 round1.PrepareReadPtr(lootBase + ObjectClass.To_NamePtr[0]); // C1
                 round1.Completed += (sender, s1) =>
                 {
                     if (s1.ReadPtr(lootBase + ObjectClass.MonoBehaviourOffset, out var monoBehaviour) &&
-                        s1.ReadPtr(lootBase + ObjectClass.To_NamePtr[0], out var c1))
+                        s1.ReadPtr(lootBase + ObjectClass.To_NamePtr[0], out var c1) &&
+                        monoBehaviour.IsValidUserVA &&
+                        c1.IsValidUserVA)
                     {
                         round2.PrepareReadPtr(monoBehaviour + UnityOffsets.Component_ObjectClassOffset); // InteractiveClass
                         round2.PrepareReadPtr(monoBehaviour + UnityOffsets.Component_GameObjectOffset); // GameObject
@@ -130,7 +140,10 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                         {
                             if (s2.ReadPtr(monoBehaviour + UnityOffsets.Component_ObjectClassOffset, out var interactiveClass) &&
                                 s2.ReadPtr(monoBehaviour + UnityOffsets.Component_GameObjectOffset, out var gameObject) &&
-                                s2.ReadPtr(c1 + ObjectClass.To_NamePtr[1], out var classNamePtr))
+                                s2.ReadPtr(c1 + ObjectClass.To_NamePtr[1], out var classNamePtr) &&
+                                interactiveClass.IsValidUserVA &&
+                                gameObject.IsValidUserVA &&
+                                classNamePtr.IsValidUserVA)
                             {
                                 round3.PrepareRead(classNamePtr, 64); // ClassName
                                 round3.PrepareReadPtr(gameObject + UnityOffsets.GameObject_ComponentsOffset); // Components
@@ -139,7 +152,9 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                                 {
                                     if (s3.ReadString(classNamePtr, 64, Encoding.UTF8) is string className &&
                                         s3.ReadPtr(gameObject + UnityOffsets.GameObject_ComponentsOffset, out var components)
-                                        && s3.ReadPtr(gameObject + UnityOffsets.GameObject_NameOffset, out var pGameObjectName))
+                                        && s3.ReadPtr(gameObject + UnityOffsets.GameObject_NameOffset, out var pGameObjectName) &&
+                                        components.IsValidUserVA &&
+                                        pGameObjectName.IsValidUserVA)
                                     {
                                         round4.PrepareRead(pGameObjectName, 64); // ObjectName
                                         round4.PrepareReadPtr(components + 0x8); // T1
@@ -147,7 +162,8 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                                         {
                                             if (
                                                 s4.ReadString(pGameObjectName, 64, Encoding.UTF8) is string objectName &&
-                                                s4.ReadPtr(components + 0x8, out var transformInternal))
+                                                s4.ReadPtr(components + 0x8, out var transformInternal) &&
+                                                transformInternal.IsValidUserVA)
                                             {
                                                 map.Completed += (sender, _) => // Store this as callback, let scatter reads all finish first (benchmarked faster)
                                                 {
