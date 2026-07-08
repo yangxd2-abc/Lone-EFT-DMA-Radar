@@ -114,6 +114,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
             var round2 = map.AddRound();
             var round3 = map.AddRound();
             var round4 = map.AddRound();
+            int scatterLootCount = 0;
             foreach (var lootBase in lootList)
             {
                 ct.ThrowIfCancellationRequested();
@@ -125,6 +126,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                 {
                     continue;
                 }
+                ++scatterLootCount;
                 round1.PrepareReadPtr(lootBase + ObjectClass.MonoBehaviourOffset); // UnityComponent
                 round1.PrepareReadPtr(lootBase + ObjectClass.To_NamePtr[0]); // C1
                 round1.Completed += (sender, s1) =>
@@ -194,15 +196,18 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                     }
                 };
             }
-            try
+            if (scatterLootCount > 0)
             {
-                map.Execute(); // execute scatter read
-            }
-            catch (Exception ex)
-            {
-                if (_scatterFallbackRateLimit.TryEnter())
-                    Logging.WriteLine($"[LootManager] Scatter loot refresh failed; falling back to sequential reads: {ex.Message}");
-                RefreshLootSequential(lootListHs, ct);
+                try
+                {
+                    map.Execute(); // execute scatter read
+                }
+                catch (Exception ex)
+                {
+                    if (_scatterFallbackRateLimit.TryEnter())
+                        Logging.WriteLine($"[LootManager] Scatter loot refresh failed for {scatterLootCount} new loot entries; falling back to sequential reads: {ex.Message}");
+                    RefreshLootSequential(lootListHs, ct);
+                }
             }
 
             // Post Scatter Read - Sync Corpses

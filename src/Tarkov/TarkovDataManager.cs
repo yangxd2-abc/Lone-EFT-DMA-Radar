@@ -140,8 +140,15 @@ namespace LoneEftDmaRadar.Tarkov
                     StringComparer.OrdinalIgnoreCase
                 )
                 .ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
-            var maps = data.Maps.ToDictionary(x => x.NameId, StringComparer.OrdinalIgnoreCase) ??
-                new Dictionary<string, TarkovDevTypes.MapElement>(StringComparer.OrdinalIgnoreCase);
+            var maps = (data.Maps ?? [])
+                .Where(x => !string.IsNullOrWhiteSpace(x.NameId))
+                .GroupBy(
+                   x => NormalizeMapId(x.NameId),
+                   StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.First(),
+                    StringComparer.OrdinalIgnoreCase);
             MapData = maps.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
             OnDataUpdated();
         }
@@ -241,6 +248,15 @@ namespace LoneEftDmaRadar.Tarkov
             }
         }
 
+        private static string NormalizeMapId(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return id;
+
+            return id.Equals("Terminal_ui", StringComparison.OrdinalIgnoreCase)
+                ? "Terminal"
+                : id;
+        }
         #endregion
     }
 }

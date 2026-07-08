@@ -4,6 +4,7 @@
  */
 using LoneEftDmaRadar.Tarkov.Unity.Collections;
 using LoneEftDmaRadar.Tarkov.Unity.Structures;
+using VmmSharpEx.Extensions;
 
 namespace LoneEftDmaRadar.Tarkov.World.Player
 {
@@ -47,19 +48,27 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
 
         internal ClientPlayer(ulong playerBase) : base(playerBase)
         {
-            Profile = Memory.ReadPtr(this + Offsets.Player.Profile);
-            Info = Memory.ReadPtr(Profile + Offsets.Profile.Info);
-            CorpseAddr = this + Offsets.Player.Corpse;
-            PlayerSide = (Enums.EPlayerSide)Memory.ReadValue<int>(Info + Offsets.PlayerInfo.Side);
-            if (!Enum.IsDefined<Enums.EPlayerSide>(PlayerSide))
-                throw new ArgumentOutOfRangeException(nameof(PlayerSide));
+            try
+            {
+                Profile = Memory.ReadPtr(this + Offsets.Player.Profile, false);
+                Info = Memory.ReadPtr(Profile + Offsets.Profile.Info, false);
+                CorpseAddr = this + Offsets.Player.Corpse;
+                PlayerSide = (Enums.EPlayerSide)Memory.ReadValue<int>(Info + Offsets.PlayerInfo.Side, false);
+                if (!Enum.IsDefined<Enums.EPlayerSide>(PlayerSide))
+                    throw new ArgumentOutOfRangeException(nameof(PlayerSide));
 
-            MovementContext = GetMovementContext();
-            RotationAddress = ValidateRotationAddr(MovementContext + Offsets.MovementContext._rotation);
-            /// Setup Transform
-            var ti = Memory.ReadPtrChain(this, false, _transformInternalChain);
-            SkeletonRoot = new UnityTransform(ti);
-            _ = SkeletonRoot.UpdatePosition();
+                MovementContext = GetMovementContext();
+                RotationAddress = ValidateRotationAddr(MovementContext + Offsets.MovementContext._rotation);
+                /// Setup Transform
+                var ti = Memory.ReadPtrChain(this, false, _transformInternalChain);
+                SkeletonRoot = new UnityTransform(ti);
+                _ = SkeletonRoot.UpdatePosition();
+            }
+            catch (Exception ex)
+            {
+                LogClientPlayerInitFailure(this, ex);
+                throw;
+            }
         }
 
         /// <summary>
@@ -67,11 +76,43 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
         /// </summary>
         private ulong GetMovementContext()
         {
-            var movementContext = Memory.ReadPtr(this + Offsets.Player.MovementContext);
+            var movementContext = Memory.ReadPtr(this + Offsets.Player.MovementContext, false);
             var player = Memory.ReadPtr(movementContext + Offsets.MovementContext._player, false);
             if (player != this)
                 throw new ArgumentOutOfRangeException(nameof(movementContext));
             return movementContext;
+        }
+
+        private static void LogClientPlayerInitFailure(ulong playerBase, Exception ex)
+        {
+            Logging.WriteLine(
+                $"[ClientPlayer] Init failed for Player=0x{playerBase:X}; " +
+                $"Offsets: Profile=0x{Offsets.Player.Profile:X}, Profile.Info=0x{Offsets.Profile.Info:X}, " +
+                $"PlayerInfo.Side=0x{Offsets.PlayerInfo.Side:X}, MovementContext=0x{Offsets.Player.MovementContext:X}; " +
+                $"{ex.GetType().Name}: {ex.Message}");
+
+            LogPtrProbe("Profile", playerBase + Offsets.Player.Profile, out var profile);
+            if (profile != 0)
+                LogPtrProbe("Profile.Info", profile + Offsets.Profile.Info, out _);
+            LogPtrProbe("MovementContext", playerBase + Offsets.Player.MovementContext, out var movementContext);
+            if (movementContext != 0)
+                LogPtrProbe("MovementContext._player", movementContext + Offsets.MovementContext._player, out _);
+        }
+
+        private static void LogPtrProbe(string name, ulong address, out ulong value)
+        {
+            value = 0;
+            try
+            {
+                var raw = Memory.ReadValue<ulong>(address, false);
+                Logging.WriteLine($"[ClientPlayer] Probe {name}: addr=0x{address:X}, raw=0x{raw:X}");
+                if (raw.IsValidUserVA())
+                    value = raw;
+            }
+            catch (Exception probeEx)
+            {
+                Logging.WriteLine($"[ClientPlayer] Probe {name}: addr=0x{address:X}, failed: {probeEx.Message}");
+            }
         }
 
         private static readonly uint[] _transformInternalChain =

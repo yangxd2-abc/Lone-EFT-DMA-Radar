@@ -25,10 +25,13 @@ namespace LoneEftDmaRadar.Tarkov.Unity.Structures
         /// </summary>
         /// <param name="unityBase">UnityPlayer.dll module base address.</param>
         /// <exception cref="InvalidOperationException"></exception>
-        public static void Init(ulong unityBase)
+        public static void Init(ulong unityBase, bool forceRefresh = false)
         {
             try
             {
+                if (forceRefresh)
+                    Cache.GameObjectManager = default;
+
                 if (Cache.GameObjectManager.IsValidUserVA())
                 {
                     Logging.WriteLine("GOM Initialized via Cache.");

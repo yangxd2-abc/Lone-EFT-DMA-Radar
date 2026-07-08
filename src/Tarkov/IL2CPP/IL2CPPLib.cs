@@ -17,11 +17,16 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP
         /// </summary>
         public static bool Initialized { get; private set; }
 
-        public static void Init(Vmm vmm, uint pid)
+        public static void Init(Vmm vmm, uint pid, bool forceRefresh = false)
         {
             try
             {
                 Logging.WriteLine("Initializing IL2CPP SDK...");
+                if (forceRefresh)
+                {
+                    Reset();
+                    Cache.GamePlayerOwner = default;
+                }
                 _vmm = vmm;
                 _pid = pid;
                 if (Cache.GamePlayerOwner.IsValidUserVA()) // Load from cache
@@ -66,6 +71,8 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP
                     return false;
                 var gamePlayerOwner = Memory.ReadValue<Class>(Cache.GamePlayerOwner);
                 var myPlayer = Memory.ReadPtr(gamePlayerOwner.static_fields + Offsets.GamePlayerOwner._myPlayer);
+                if (myPlayer == 0)
+                    return false;
                 gameWorld = Memory.ReadPtr(myPlayer + Offsets.Player.GameWorld);
                 /// Get Selected Map
                 var mapPtr = Memory.ReadValue<ulong>(gameWorld + Offsets.GameWorld.LocationId);
@@ -83,6 +90,8 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP
             }
             catch (Exception ex)
             {
+                if (ex.Message.Contains("Address 0x0", StringComparison.OrdinalIgnoreCase))
+                    return false;
                 if (_gameWorldLookupErrorRateLimit.TryEnter())
                     Logging.WriteLine($"Failed to get GameWorld via IL2CPP: {ex}");
                 return false;

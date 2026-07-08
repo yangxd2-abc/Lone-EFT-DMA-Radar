@@ -181,7 +181,11 @@ namespace LoneEftDmaRadar.Tarkov.World
                 }
                 catch (Exception ex)
                 {
-                    Logging.WriteLine($"ERROR Instantiating Game Instance: {ex}");
+                    if (ex is InvalidOperationException { InnerException.Message: "GameWorld not found." })
+                        Logging.WriteLine("Waiting for GameWorld...");
+                    else
+                        Logging.WriteLine($"ERROR Instantiating Game Instance: {ex}");
+                    Memory.RefreshRuntimeResolvers();
                 }
                 finally
                 {
@@ -659,6 +663,9 @@ namespace LoneEftDmaRadar.Tarkov.World
         /// </summary>
         private static class Lookup
         {
+            private static readonly RateLimiter _candidateValidationErrorRateLimit = new(TimeSpan.FromSeconds(5));
+            private static readonly RateLimiter _candidateAcceptedLogRateLimit = new(TimeSpan.FromSeconds(5));
+
             public static void Find(out ulong gameWorld, out string map)
             {
                 Logging.WriteLine("Searching for GameWorld...");
@@ -842,6 +849,12 @@ namespace LoneEftDmaRadar.Tarkov.World
                             string map = Memory.ReadUnityString(mapPtr, 128);
                             if (!TarkovDataManager.MapData.ContainsKey(map)) // Also makes sure we're not in the hideout
                                 return null;
+                            if (!TryValidateGameWorldCandidate(gameWorld, out var reason))
+                            {
+                                if (_candidateValidationErrorRateLimit.TryEnter())
+                                    Logging.WriteLine($"Invalid GameWorld candidate: {reason}");
+                                return null;
+                            }
                             Logging.WriteLine("Detected Map " + map);
                             return new GameWorldResult()
                             {
@@ -851,12 +864,136 @@ namespace LoneEftDmaRadar.Tarkov.World
                         }
                         catch (Exception ex)
                         {
-                            Logging.WriteLine($"Invalid GameWorld Instance: {ex}");
+                            if (!ex.Message.Contains("Address 0x0", StringComparison.OrdinalIgnoreCase))
+                                Logging.WriteLine($"Invalid GameWorld Instance: {ex.Message}");
                         }
                     }
                 }
                 catch { }
                 return null;
+            }
+
+            private static bool TryValidateGameWorldCandidate(ulong gameWorld, out string reason)
+            {
+                reason = default;
+                if (!gameWorld.IsValidUserVA())
+                {
+                    reason = $"GameWorld=0x{gameWorld:X} invalid";
+                    return false;
+                }
+
+                if (!TryReadPtr(gameWorld + Offsets.GameWorld.RegisteredPlayers, out var registeredPlayers, out reason, "RegisteredPlayers") ||
+                    !TryReadPtr(gameWorld + Offsets.GameWorld.MainPlayer, out var mainPlayer, out reason, "MainPlayer") ||
+                    !TryReadProfile(mainPlayer, out var profile, out reason) ||
+                    !TryReadPtr(profile + Offsets.Profile.Info, out var info, out reason, "Profile.Info") ||
+                    !TryReadPtr(mainPlayer + Offsets.Player.MovementContext, out var movementContext, out reason, "MovementContext"))
+                {
+                    reason = $"GameWorld=0x{gameWorld:X}: {reason}";
+                    return false;
+                }
+
+                try
+                {
+                    var player = Memory.ReadPtr(movementContext + Offsets.MovementContext._player, false);
+                    if (player != mainPlayer)
+                    {
+                        reason = $"GameWorld=0x{gameWorld:X}: MovementContext._player=0x{player:X} expected MainPlayer=0x{mainPlayer:X}";
+                        return false;
+                    }
+
+                    _ = ObjectClass.ReadName(mainPlayer, 64, false);
+                    _ = registeredPlayers;
+                    _ = info;
+                    if (_candidateAcceptedLogRateLimit.TryEnter())
+                    {
+                        Logging.WriteLine(
+                            $"[GameWorld] Candidate OK: GameWorld=0x{gameWorld:X}, " +
+                            $"RegisteredPlayers=0x{registeredPlayers:X} (off=0x{Offsets.GameWorld.RegisteredPlayers:X}), " +
+                            $"MainPlayer=0x{mainPlayer:X} (off=0x{Offsets.GameWorld.MainPlayer:X}), " +
+                            $"Profile=0x{profile:X} (off=0x{Offsets.Player.Profile:X}), " +
+                            $"Info=0x{info:X} (off=0x{Offsets.Profile.Info:X}), " +
+                            $"MovementContext=0x{movementContext:X} (off=0x{Offsets.Player.MovementContext:X})");
+                    }
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    reason = $"GameWorld=0x{gameWorld:X}: player validation failed: {ex.Message}";
+                    return false;
+                }
+            }
+
+            private static bool TryReadProfile(ulong mainPlayer, out ulong profile, out string reason)
+            {
+                if (TryReadPtr(mainPlayer + Offsets.Player.Profile, out profile, out reason, "Profile"))
+                    return true;
+
+                string originalReason = reason;
+                if (TryRecoverProfileOffset(mainPlayer, out var recoveredOffset, out profile, out var info, out var side))
+                {
+                    uint previous = Offsets.Player.Profile;
+                    Offsets.Player.Profile = recoveredOffset;
+                    Logging.WriteLine(
+                        $"[Offsets] Player.Profile recovered: 0x{previous:X} -> 0x{recoveredOffset:X}; " +
+                        $"MainPlayer=0x{mainPlayer:X}, Profile=0x{profile:X}, Info=0x{info:X}, Side={side}");
+                    return true;
+                }
+
+                reason = $"{originalReason}; profile scan failed in MainPlayer field range 0x700-0xD00";
+                return false;
+            }
+
+            private static bool TryRecoverProfileOffset(
+                ulong mainPlayer,
+                out uint profileOffset,
+                out ulong profile,
+                out ulong info,
+                out Enums.EPlayerSide side)
+            {
+                profileOffset = default;
+                profile = default;
+                info = default;
+                side = default;
+
+                for (uint offset = 0x700; offset <= 0xD00; offset += 0x8)
+                {
+                    try
+                    {
+                        var candidateProfile = Memory.ReadValue<ulong>(mainPlayer + offset, false);
+                        if (!candidateProfile.IsValidUserVA())
+                            continue;
+
+                        var candidateInfo = Memory.ReadPtr(candidateProfile + Offsets.Profile.Info, false);
+                        var candidateSide = (Enums.EPlayerSide)Memory.ReadValue<int>(candidateInfo + Offsets.PlayerInfo.Side, false);
+                        if (!Enum.IsDefined<Enums.EPlayerSide>(candidateSide))
+                            continue;
+
+                        profileOffset = offset;
+                        profile = candidateProfile;
+                        info = candidateInfo;
+                        side = candidateSide;
+                        return true;
+                    }
+                    catch { }
+                }
+
+                return false;
+            }
+
+            private static bool TryReadPtr(ulong address, out ulong value, out string reason, string fieldName)
+            {
+                value = default;
+                reason = default;
+                try
+                {
+                    value = Memory.ReadPtr(address, false);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    reason = $"{fieldName} @ 0x{address:X} invalid: {ex.Message}";
+                    return false;
+                }
             }
 
             private class GameWorldResult

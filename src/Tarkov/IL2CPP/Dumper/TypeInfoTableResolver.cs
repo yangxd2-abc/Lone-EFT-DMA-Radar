@@ -18,6 +18,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
         private const int MidProbeOffset = 5_000;
         private const int MidProbeCount = 8;
         private const int MidProbeRequired = 3;
+        private const int MinTypeCount = 1_000;
         private const string GameAssemblyName = "GameAssembly.dll";
         private const string LogTag = "[Il2CppDumper]";
 
@@ -27,9 +28,13 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
         /// </summary>
         private static readonly (string Sig, int RelOffset, int InstrLen, string Desc)[] TypeInfoTableSigs =
         [
+            ("48 C1 E9 04 BA 08 00 00 00 ? ? ? 48 89 05 ? ? ? ? 48 8B 05 ? ? ? ?", 15, 19, "init: shr rcx,4; mov edx,8; call; mov [rip+rel32],rax"),
+            ("48 8B 05 ? ? ? ? 4C 8D 34 F0 49 8B 3E", 3, 7, "read: mov rax,[rip+rel32]; lea r14,[rax+rsi*8]"),
             ("48 8B 05 ? ? ? ? ? ? ? ? ? ? ? 90 48 85 DB 75 ? 48 8D 2D ? ? ? ? 48 89 6C 24 ? 48 8B CD E8 ? ? ? ? 90 ? ? ? 48 85 DB 75 ? 8B CF", 3, 7, "read: mov rax,[rip+rel32] (table lookup)"),
             ("48 89 05 ? ? ? ? 48 8B 05 ? ? ? ? 8B 48", 3, 7, "write: mov [rip+rel32],rax (init store)"),
+            ("48 89 05 ? ? ? ? 48 8B 05 ? ? ? ? 8B 48", 10, 14, "read: second mov rax,[rip+rel32] after init store"),
             ("48 89 05 ? ? ? ? 48 8B 05", 3, 7, "write: mov [rip+rel32],rax; mov rax,[rip+rel32] (minimal)"),
+            ("48 89 05 ? ? ? ? 48 8B 05", 10, 14, "read: second mov rax,[rip+rel32] (minimal)"),
         ];
 
         private static readonly (string Il2CppName, string FieldName)[] TypeIndexMap =
@@ -45,7 +50,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
         private static readonly FieldInfo[] CachedTypeIndexFields =
             typeof(Offsets.Special).GetFields(BindingFlags.Public | BindingFlags.Static);
 
-        private record struct SigScanResult(int Index, string Desc, string State, int Matches, int ValidMatches, ulong Rva);
+        private record struct SigScanResult(int Index, string Desc, string State, int Matches, int ValidMatches, ulong Rva, string Detail = "");
 
         private static SigScanResult[] _lastSigResults = [];
         private static string _lastResolutionMode = "not run";
@@ -72,7 +77,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 Offsets.Special.TypeInfoTableRva = first.Value.rva;
                 Logging.WriteLine($"{LogTag} TypeInfoTable resolved: rva=0x{first.Value.rva:X}, unique={testedRvas.Count}");
                 if (prev != first.Value.rva)
-                    Logging.WriteLine($"{LogTag} TypeInfoTableRva UPDATED: 0x{prev:X} → 0x{first.Value.rva:X}");
+                    Logging.WriteLine($"{LogTag} TypeInfoTableRva UPDATED: 0x{prev:X} -> 0x{first.Value.rva:X}");
                 _lastResolutionMode = "signature";
                 success = true;
             }
@@ -85,12 +90,14 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             else
             {
                 if (!quiet)
-                    Logging.WriteLine($"{LogTag} WARNING: All TypeInfoTable resolution strategies failed — offsets may be stale!");
+                    Logging.WriteLine($"{LogTag} WARNING: All TypeInfoTable resolution strategies failed - offsets may be stale!");
                 _lastResolutionMode = "FAILED";
                 success = false;
             }
 
             _lastSigResults = [.. sigResults];
+            if (!success && !quiet)
+                DebugDumpResolverState(0, 0, 0, 0);
             return success;
         }
 
@@ -105,19 +112,28 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             catch (Exception ex)
             {
                 Logging.WriteLine($"{LogTag} TypeInfoTable sig[{index}] scan error: {ex.Message}");
-                return (null, new SigScanResult(index, desc, "ERROR", 0, 0, 0));
+                return (null, new SigScanResult(index, desc, "ERROR", 0, 0, 0, ex.Message));
             }
 
             if (sigAddrs.Length == 0)
                 return (null, new SigScanResult(index, desc, "MISS", 0, 0, 0));
 
             ulong duplicateRva = 0;
+            string firstInvalidDetail = "";
             int validCount = 0;
             foreach (var sigAddr in sigAddrs)
             {
                 var rva = ResolveRipRelativeRva(sigAddr, relOff, instrLen, gaBase);
-                if (rva == 0 || !ValidateTypeInfoTable(gaBase, rva))
+                if (rva == 0)
+                {
+                    firstInvalidDetail = $"sig=0x{sigAddr:X}, rva=0";
                     continue;
+                }
+                if (!ValidateTypeInfoTable(gaBase, rva, out var detail))
+                {
+                    firstInvalidDetail = $"sig=0x{sigAddr:X}, rva=0x{rva:X}, {detail}";
+                    continue;
+                }
 
                 validCount++;
                 if (testedRvas.Add(rva))
@@ -129,7 +145,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             if (duplicateRva != 0)
                 return (null, new SigScanResult(index, desc, "DUPLICATE", sigAddrs.Length, validCount, duplicateRva));
 
-            return (null, new SigScanResult(index, desc, "INVALID", sigAddrs.Length, validCount, 0));
+            return (null, new SigScanResult(index, desc, "INVALID", sigAddrs.Length, validCount, 0, firstInvalidDetail));
         }
 
         private static ulong ResolveRipRelativeRva(ulong sigAddr, int relOffset, int instrLen, ulong gaBase)
@@ -142,18 +158,54 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             return globalVa > gaBase ? globalVa - gaBase : 0;
         }
 
-        private static bool ValidateTypeInfoTable(ulong gaBase, ulong rva)
+        private static bool ValidateTypeInfoTable(ulong gaBase, ulong rva) =>
+            ValidateTypeInfoTable(gaBase, rva, out _);
+
+        private static bool ValidateTypeInfoTable(ulong gaBase, ulong rva, out string detail)
         {
+            detail = "";
             ulong tablePtr;
             try { tablePtr = Memory.ReadPtr(gaBase + rva, false); }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                detail = $"ptrSlot=0x{gaBase + rva:X}, read failed: {ex.Message}";
+                return false;
+            }
 
-            return tablePtr.IsValidUserVA()
-                && ProbeTableEntries(tablePtr, 0, EarlyProbeCount, EarlyProbeRequired)
-                && ProbeTableEntries(tablePtr, MidProbeOffset, MidProbeCount, MidProbeRequired);
+            int earlyValid = CountValidTableEntries(tablePtr, 0, EarlyProbeCount);
+            int midValid = CountValidTableEntries(tablePtr, MidProbeOffset, MidProbeCount);
+            int typeBytes = ReadTypeCountBytes(tablePtr);
+            int typeCount = typeBytes > 0 ? typeBytes / 8 : 0;
+            int tailStart = typeCount > EarlyProbeCount ? Math.Max(0, typeCount - EarlyProbeCount) : 0;
+            int tailValid = typeCount > EarlyProbeCount ? CountValidTableEntries(tablePtr, tailStart, EarlyProbeCount) : 0;
+            detail = $"ptrSlot=0x{gaBase + rva:X}, table=0x{tablePtr:X}, typeBytes={typeBytes}, typeCount={typeCount}, early={earlyValid}/{EarlyProbeCount}, mid={midValid}/{MidProbeCount}, tail={tailValid}/{EarlyProbeCount}";
+
+            if (!tablePtr.IsValidUserVA())
+                return false;
+
+            bool hasPlausibleCount = typeBytes > 0
+                && typeBytes % 8 == 0
+                && typeCount is >= MinTypeCount and <= MaxClasses;
+            if (hasPlausibleCount && (earlyValid >= EarlyProbeRequired || midValid >= MidProbeRequired || tailValid >= EarlyProbeRequired))
+                return true;
+
+            return earlyValid >= EarlyProbeRequired
+                && midValid >= MidProbeRequired;
         }
 
-        private static bool ProbeTableEntries(ulong tablePtr, int startIndex, int count, int required)
+        private static int ReadTypeCountBytes(ulong tablePtr)
+        {
+            if (tablePtr < 0x10)
+                return 0;
+
+            try { return Memory.ReadValue<int>(tablePtr - 0x10, false); }
+            catch { return 0; }
+        }
+
+        private static bool ProbeTableEntries(ulong tablePtr, int startIndex, int count, int required) =>
+            CountValidTableEntries(tablePtr, startIndex, count) >= required;
+
+        private static int CountValidTableEntries(ulong tablePtr, int startIndex, int count)
         {
             ulong[] ptrs;
             try
@@ -161,14 +213,14 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 using var pooled = Memory.ReadPooled<ulong>(tablePtr + (ulong)startIndex * 8, count, false);
                 ptrs = pooled.Memory.Span.ToArray();
             }
-            catch { return false; }
+            catch { return 0; }
 
             int valid = 0;
             foreach (var ptr in ptrs)
-                if (IsValidClassPtr(ptr) && ++valid >= required)
-                    return true;
+                if (IsValidClassPtr(ptr))
+                    valid++;
 
-            return false;
+            return valid;
         }
 
         private static bool IsValidClassPtr(ulong ptr)
@@ -216,7 +268,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                         }
                     }
                     if (!found)
-                        Logging.WriteLine($"{LogTag} WARN: '{il2cppName}' not found in type table — {fieldName} using fallback ({fi.GetValue(null) ?? 0u}).");
+                        Logging.WriteLine($"{LogTag} WARN: '{il2cppName}' not found in type table - {fieldName} using fallback ({fi.GetValue(null) ?? 0u}).");
                 }
                 else if (nameToIndex.TryGetValue(il2cppName, out var index))
                 {
@@ -224,7 +276,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 }
                 else
                 {
-                    Logging.WriteLine($"{LogTag} WARN: '{il2cppName}' not found in type table — {fieldName} using fallback ({fi.GetValue(null) ?? 0u}).");
+                    Logging.WriteLine($"{LogTag} WARN: '{il2cppName}' not found in type table - {fieldName} using fallback ({fi.GetValue(null) ?? 0u}).");
                 }
             }
         }
@@ -237,7 +289,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             var previous = (uint)(fi.GetValue(null) ?? 0u);
             fi.SetValue(null, newValue);
             if (previous != newValue)
-                Logging.WriteLine($"{LogTag} {fi.Name} UPDATED: {previous} → {newValue}");
+                Logging.WriteLine($"{LogTag} {fi.Name} UPDATED: {previous} -> {newValue}");
         }
 
         // ── Diagnostic report ───────────────────────────────────────────────────
@@ -288,6 +340,8 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                     ? $"  [{r.Index}] {state,-7} matches={r.Matches,-4} valid={r.ValidMatches,-4} rva=0x{r.Rva:X}"
                     : $"  [{r.Index}] {state,-7} matches={r.Matches,-4} valid={r.ValidMatches}";
                 Logging.WriteLine($"{LogTag} {Row(status)}");
+                if (!string.IsNullOrWhiteSpace(r.Detail))
+                    Logging.WriteLine($"{LogTag} {Row($"       {r.Detail}")}");
                 string rawSig = TypeInfoTableSigs[r.Index].Sig;
                 string sigLine = rawSig.Length > SigTruncLen ? rawSig[..SigTruncLen] + "..." : rawSig;
                 Logging.WriteLine($"{LogTag} {Row($"       {sigLine}")}");

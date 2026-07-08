@@ -34,6 +34,7 @@ namespace LoneEftDmaRadar.DMA
         private static Vmm _vmm = null!;
         private static InputManager _input;
         private static uint _pid;
+        private static RateLimiter _runtimeResolverRefreshRateLimit = new(TimeSpan.FromSeconds(5));
 
         public static string MapID => Game?.MapID;
         public static ulong UnityBase { get; private set; }
@@ -366,6 +367,55 @@ namespace LoneEftDmaRadar.DMA
                 GameObjectManager.Init(unityBase);
             }
             UnityBase = unityBase;
+        }
+
+        /// <summary>
+        /// Refreshes runtime IL2CPP/GOM resolvers while waiting for a raid to appear.
+        /// </summary>
+        internal static void RefreshRuntimeResolvers()
+        {
+            if (!_runtimeResolverRefreshRateLimit.TryEnter())
+                return;
+
+            try
+            {
+                Logging.WriteLine("[Memory] Refreshing runtime resolvers while waiting for raid...");
+                _vmm.ForceFullRefresh();
+
+                var unityBase = _vmm.ProcessGetModuleBase(_pid, "UnityPlayer.dll");
+                unityBase.ThrowIfInvalidUserVA(nameof(unityBase));
+                var gameAssemblyBase = _vmm.ProcessGetModuleBase(_pid, "GameAssembly.dll");
+                gameAssemblyBase.ThrowIfInvalidUserVA(nameof(gameAssemblyBase));
+
+                UnityBase = unityBase;
+                GameAssemblyBase = gameAssemblyBase;
+
+                if (!IL2CPPLib.Initialized || Tarkov.IL2CPP.Dumper.Il2CppDumper.NeedsLiveRefresh)
+                {
+                    try
+                    {
+                        Tarkov.IL2CPP.Dumper.Il2CppDumper.Dump(force: Tarkov.IL2CPP.Dumper.Il2CppDumper.NeedsLiveRefresh);
+                        IL2CPPLib.Init(_vmm, _pid, forceRefresh: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logging.WriteLine($"[Memory] Runtime IL2CPP refresh failed, keeping GOM fallback available: {ex.Message}");
+                    }
+                }
+
+                try
+                {
+                    _ = GameObjectManager.Get();
+                }
+                catch
+                {
+                    GameObjectManager.Init(unityBase, forceRefresh: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteLine($"[Memory] Runtime resolver refresh failed: {ex.Message}");
+            }
         }
 
         #endregion

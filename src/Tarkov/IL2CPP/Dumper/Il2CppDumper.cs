@@ -58,6 +58,9 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
         /// Run-once guard. Reset via <see cref="ResetForRedump"/> for the force-redump UI action.
         /// </summary>
         private static volatile bool _dumped;
+        public static bool LastLiveDumpSucceeded { get; private set; }
+        public static bool LastDumpUsedStaleCache { get; private set; }
+        public static bool NeedsLiveRefresh => LastDumpUsedStaleCache || !LastLiveDumpSucceeded;
 
         /// <summary>
         /// Wipes the run-once guard and on-disk caches so the next <see cref="Dump"/>
@@ -76,20 +79,21 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
         /// </summary>
         [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = "Offsets nested types are statically reachable.")]
         [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Offsets nested types are statically reachable.")]
-        public static void Dump()
+        public static void Dump(bool force = false)
         {
-            if (_dumped)
+            if (_dumped && !force)
             {
-                Logging.WriteLine("[Il2CppDumper] Already dumped this session — skipping.");
                 return;
             }
 
+            LastLiveDumpSucceeded = false;
+            LastDumpUsedStaleCache = false;
             Logging.WriteLine("[Il2CppDumper] Dump starting...");
 
             var gaBase = Memory.GameAssemblyBase;
             if (gaBase == 0)
             {
-                Logging.WriteLine("[Il2CppDumper] ERROR: GameAssemblyBase is 0 — game not ready.");
+                Logging.WriteLine("[Il2CppDumper] ERROR: GameAssemblyBase is 0 - game not ready.");
                 return;
             }
 
@@ -97,6 +101,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             if (TryFastLoadCache(gaBase))
             {
                 _dumped = true;
+                LastLiveDumpSucceeded = true;
                 return;
             }
 
@@ -126,10 +131,11 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 if (TryLoadCacheStale())
                 {
                     _dumped = true;
+                    LastDumpUsedStaleCache = true;
                     Logging.WriteLine("[Il2CppDumper] Using last cached offsets as fallback.");
                     return;
                 }
-                Logging.WriteLine("[Il2CppDumper] No cache available — falling back to compiled-in offsets.");
+                Logging.WriteLine("[Il2CppDumper] No cache available - falling back to compiled-in offsets.");
                 return;
             }
 
@@ -138,7 +144,8 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             if (TryLoadCache(Offsets.Special.TypeInfoTableRva))
             {
                 _dumped = true;
-                Logging.WriteLine("[Il2CppDumper] Offsets restored from cache — live dump skipped.");
+                Logging.WriteLine("[Il2CppDumper] Offsets restored from cache - live dump skipped.");
+                LastLiveDumpSucceeded = true;
                 SaveCache(); // refresh PE fingerprint for next fast-path
                 return;
             }
@@ -163,10 +170,11 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 if (TryLoadCacheStale())
                 {
                     _dumped = true;
+                    LastDumpUsedStaleCache = true;
                     Logging.WriteLine("[Il2CppDumper] Using last cached offsets as fallback.");
                     return;
                 }
-                Logging.WriteLine("[Il2CppDumper] No cache available — falling back to compiled-in offsets.");
+                Logging.WriteLine("[Il2CppDumper] No cache available - falling back to compiled-in offsets.");
                 return;
             }
 
@@ -182,21 +190,22 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
 
                 if (attempt < maxRetries)
                 {
-                    Logging.WriteLine($"[Il2CppDumper] Only {classes.Count} classes found (expected ≥{MinExpectedClasses}), retrying... ({attempt}/{maxRetries})");
+                    Logging.WriteLine($"[Il2CppDumper] Only {classes.Count} classes found (expected >= {MinExpectedClasses}), retrying... ({attempt}/{maxRetries})");
                     Thread.Sleep(1000);
                 }
             }
 
             if (classes.Count < MinExpectedClasses)
             {
-                Logging.WriteLine($"[Il2CppDumper] Live dump failed: only {classes.Count} classes found (expected ≥{MinExpectedClasses}) after {maxRetries} attempts.");
+                Logging.WriteLine($"[Il2CppDumper] Live dump failed: only {classes.Count} classes found (expected >= {MinExpectedClasses}) after {maxRetries} attempts.");
                 if (TryLoadCacheStale())
                 {
                     _dumped = true;
+                    LastDumpUsedStaleCache = true;
                     Logging.WriteLine("[Il2CppDumper] Using last cached offsets as fallback.");
                     return;
                 }
-                Logging.WriteLine("[Il2CppDumper] No cache available — falling back to compiled-in offsets.");
+                Logging.WriteLine("[Il2CppDumper] No cache available - falling back to compiled-in offsets.");
                 return;
             }
 
@@ -303,7 +312,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 var nestedType = offsetsType.GetNestedType(sc.CsName, BindingFlags.Public | BindingFlags.NonPublic);
                 if (nestedType is null)
                 {
-                    Logging.WriteLine($"[Il2CppDumper] WARN: struct Offsets.{sc.CsName} not found via reflection — skipping.");
+                    Logging.WriteLine($"[Il2CppDumper] WARN: struct Offsets.{sc.CsName} not found via reflection - skipping.");
                     classesSkipped++;
                     continue;
                 }
@@ -328,7 +337,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                         }
                         else
                         {
-                            Logging.WriteLine($"[Il2CppDumper] WARN: method '{methodName}' not found in '{sc.CsName}' — using fallback.");
+                            Logging.WriteLine($"[Il2CppDumper] WARN: method '{methodName}' not found in '{sc.CsName}' - using fallback.");
                             fallback++;
                         }
                     }
@@ -339,7 +348,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                             var alt = FlipBackingFieldConvention(sf.Il2CppName);
                             if (alt is null || !fieldMap.TryGetValue(alt, out offset))
                             {
-                                Logging.WriteLine($"[Il2CppDumper] WARN: field '{sf.Il2CppName}' not found in '{sc.CsName}' — using fallback.");
+                                Logging.WriteLine($"[Il2CppDumper] WARN: field '{sf.Il2CppName}' not found in '{sc.CsName}' - using fallback.");
                                 fallback++;
                                 continue;
                             }
@@ -356,6 +365,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             Logging.WriteLine($"[Il2CppDumper] Done. {updated} offsets updated, {fallback} fallback, {classesSkipped} skipped.");
 
             _dumped = true;
+            LastLiveDumpSucceeded = true;
             SaveCache();
         }
 

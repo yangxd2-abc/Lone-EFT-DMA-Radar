@@ -30,7 +30,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
         /// makes previously-cached values wrong (e.g. switching which IL2CPP field
         /// a C# offset is sourced from). Older caches are discarded automatically.
         /// </summary>
-        private const int CacheSchemaVersion = 1;
+        private const int CacheSchemaVersion = 2;
 
         /// <summary>
         /// Radar assembly ModuleVersionId — changes on every rebuild. Used to invalidate
@@ -77,7 +77,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 Directory.CreateDirectory(CacheDir);
                 File.WriteAllText(CacheFilePathPe, json);
                 File.WriteAllText(CacheFilePathRva, json);
-                Logging.WriteLine($"[Il2CppDumper] Cache saved → {CacheDir} (PE + RVA)");
+                Logging.WriteLine($"[Il2CppDumper] Cache saved -> {CacheDir} (PE + RVA)");
             }
             catch (Exception ex)
             {
@@ -121,7 +121,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                     Offsets.Special.TypeInfoTableRva = cache.TypeInfoTableRva;
 
                 int applied = ApplyCachedFields(cache.Fields);
-                Logging.WriteLine($"[Il2CppDumper] Stale cache applied from {Path.GetFileName(src)} — {applied}/{cache.Fields.Count} fields restored.");
+                Logging.WriteLine($"[Il2CppDumper] Stale cache applied from {Path.GetFileName(src)} - {applied}/{cache.Fields.Count} fields restored.");
                 return applied > 0;
             }
             catch (Exception ex)
@@ -143,7 +143,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 var cache = TryReadAnyCache(out var src);
                 if (cache is null)
                 {
-                    Logging.WriteLine("[Il2CppDumper] No cache file found — will perform live dump.");
+                    Logging.WriteLine("[Il2CppDumper] No cache file found - will perform live dump.");
                     return false;
                 }
 
@@ -151,17 +151,17 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 {
                     Logging.WriteLine(
                         $"[Il2CppDumper] Cache RVA mismatch: cached=0x{cache.TypeInfoTableRva:X} " +
-                        $"current=0x{expectedRva:X} — performing live dump.");
+                        $"current=0x{expectedRva:X} - performing live dump.");
                     return false;
                 }
 
                 int applied = ApplyCachedFields(cache.Fields);
-                Logging.WriteLine($"[Il2CppDumper] Cache loaded from {Path.GetFileName(src)} (RVA match) — {applied}/{cache.Fields.Count} fields applied.");
+                Logging.WriteLine($"[Il2CppDumper] Cache loaded from {Path.GetFileName(src)} (RVA match) - {applied}/{cache.Fields.Count} fields applied.");
                 return applied > 0;
             }
             catch (Exception ex)
             {
-                Logging.WriteLine($"[Il2CppDumper] Cache load FAILED: {ex.Message} — will perform live dump.");
+                Logging.WriteLine($"[Il2CppDumper] Cache load FAILED: {ex.Message} - will perform live dump.");
                 return false;
             }
         }
@@ -183,7 +183,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
 
                 if (cache.GameAssemblyTimestamp != timestamp || cache.GameAssemblySizeOfImage != sizeOfImage)
                 {
-                    Logging.WriteLine("[Il2CppDumper] PE fingerprint mismatch (game updated?) — will perform fresh dump.");
+                    Logging.WriteLine("[Il2CppDumper] PE fingerprint mismatch (game updated?) - will perform fresh dump.");
                     return false;
                 }
 
@@ -191,7 +191,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                     Offsets.Special.TypeInfoTableRva = cache.TypeInfoTableRva;
 
                 int applied = ApplyCachedFields(cache.Fields);
-                Logging.WriteLine($"[Il2CppDumper] Fast cache loaded from {Path.GetFileName(src)} (PE match) — {applied}/{cache.Fields.Count} fields applied.");
+                Logging.WriteLine($"[Il2CppDumper] Fast cache loaded from {Path.GetFileName(src)} (PE match) - {applied}/{cache.Fields.Count} fields applied.");
                 return applied > 0;
             }
             catch (Exception ex)

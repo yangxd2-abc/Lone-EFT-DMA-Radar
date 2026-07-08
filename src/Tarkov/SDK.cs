@@ -53,13 +53,13 @@ namespace SDK
         public readonly partial struct Player
         {
             public static uint MovementContext = 0x60; // object
-            public static uint _playerBody = 0x190; // object
-            public static uint GameWorld = 0x5F8; // object
-            public static uint Corpse = 0x718; // object
-            public static uint Location = 0x918; // string
-            public static uint Profile = 0x9B0; // object
-            public static uint _handsController = 0xA30; // object
-            public static uint _playerLookRaycastTransform = 0xA18; // object
+            public static uint _playerBody = 0x198; // object
+            public static uint GameWorld = 0x688; // object
+            public static uint Corpse = 0x720; // object
+            public static uint Location = 0x920; // string
+            public static uint Profile = 0x9B8; // object
+            public static uint _handsController = 0xA38; // object
+            public static uint _playerLookRaycastTransform = 0xAC8; // object
         }
 
         public readonly partial struct ObservedPlayerView
@@ -135,7 +135,7 @@ namespace SDK
 
         public readonly partial struct WishlistManager
         {
-            public static uint _wishlistItems = 0x30; // object
+            public static uint _wishlistItems = 0x28; // object
         }
 
         public readonly partial struct PlayerInfo
@@ -170,7 +170,7 @@ namespace SDK
 
         public readonly partial struct LootableContainer
         {
-            public static uint ItemOwner = 0x168; // object
+            public static uint ItemOwner = 0x178; // object
         }
 
         public readonly partial struct ItemController

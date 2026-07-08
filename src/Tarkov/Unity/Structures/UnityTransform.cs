@@ -81,12 +81,14 @@ namespace LoneEftDmaRadar.Tarkov.Unity.Structures
                     vertices = standaloneVertices.Memory.Span;
                 }
 
+                ArgumentOutOfRangeException.ThrowIfLessThan(vertices.Length, Count, nameof(vertices));
                 var worldPos = vertices[_index].t;
                 int index = Indices[_index];
                 int iterations = 0;
                 while (index >= 0)
                 {
                     ArgumentOutOfRangeException.ThrowIfGreaterThan(iterations++, MAX_ITERATIONS, nameof(iterations));
+                    ThrowIfInvalidParentIndex(index, vertices.Length);
                     var parent = vertices[index];
 
                     worldPos = parent.q.Multiply(worldPos);
@@ -96,13 +98,23 @@ namespace LoneEftDmaRadar.Tarkov.Unity.Structures
                     index = Indices[index];
                 }
 
-                worldPos.ThrowIfAbnormal(nameof(worldPos));
+                worldPos.ThrowIfAbnormalAndNotZero(nameof(worldPos));
                 _position = worldPos;
                 return ref _position;
             }
             finally
             {
                 standaloneVertices?.Dispose();
+            }
+        }
+
+        private void ThrowIfInvalidParentIndex(int index, int verticesLength)
+        {
+            if ((uint)index >= (uint)verticesLength || (uint)index >= (uint)_indices.Length)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(index),
+                    $"Invalid transform parent index {index} for transform count {Count}.");
             }
         }
 
@@ -217,7 +229,7 @@ namespace LoneEftDmaRadar.Tarkov.Unity.Structures
                     index = Indices[index];
                 }
 
-                worldPos.ThrowIfAbnormal(nameof(worldPos));
+                worldPos.ThrowIfAbnormalAndNotZero(nameof(worldPos));
                 return worldPos;
             }
             finally

@@ -24,6 +24,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
     public abstract class AbstractPlayer : IWorldEntity, IMapEntity, IMouseoverEntity
     {
         private static readonly ConcurrentDictionary<ulong, DateTime> _allocationErrorLogTimes = new();
+        private RateLimiter _skeletonRootErrorRateLimit = new(TimeSpan.FromSeconds(5));
 
         /// <summary>
         /// Group ID for Solo Players.
@@ -104,7 +105,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
                     now - lastLog >= TimeSpan.FromSeconds(5))
                 {
                     _allocationErrorLogTimes[playerBase] = now;
-                    Logging.WriteLine($"ERROR during Player Allocation for player @ 0x{playerBase:X}: {ex}");
+                    Logging.WriteLine($"WARNING - Player allocation deferred for player @ 0x{playerBase:X}: {ex.GetType().Name}: {ex.Message}");
                 }
             }
         }
@@ -419,42 +420,59 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
         /// <param nickName="index">Scatter read index dedicated to this player.</param>
         public virtual void OnRealtimeLoop(VmmScatter scatter)
         {
+            var skeletonRoot = SkeletonRoot;
             scatter.PrepareReadValue<Vector2>(RotationAddress); // Rotation
-            scatter.PrepareReadArray<TrsX>(SkeletonRoot.VerticesAddr, SkeletonRoot.Count); // ESP Vertices
+            scatter.PrepareReadArray<TrsX>(skeletonRoot.VerticesAddr, skeletonRoot.Count); // ESP Vertices
 
             scatter.Completed += (sender, s) =>
             {
                 bool successRot = false;
-                bool successPos = true;
+                bool successPos = false;
                 if (s.ReadValue<Vector2>(RotationAddress, out var rotation))
                     successRot = SetRotation(rotation);
 
-                if (s.ReadPooled<TrsX>(SkeletonRoot.VerticesAddr, SkeletonRoot.Count) is IMemoryOwner<TrsX> vertices)
+                if (s.ReadPooled<TrsX>(skeletonRoot.VerticesAddr, skeletonRoot.Count) is IMemoryOwner<TrsX> vertices)
                 {
                     using (vertices)
                     {
                         try
                         {
-                            try
-                            {
-                                _ = SkeletonRoot.UpdatePosition(vertices.Memory.Span);
-                            }
-                            catch (Exception ex) // Attempt to re-allocate Transform on error
-                            {
-                                Logging.WriteLine($"ERROR getting Player '{Name}' SkeletonRoot Position: {ex}");
-                                var transform = new UnityTransform(SkeletonRoot.TransformInternal);
-                                SkeletonRoot = transform;
-                            }
+                            _ = skeletonRoot.UpdatePosition(vertices.Memory.Span);
+                            successPos = true;
                         }
-                        catch
+                        catch (Exception ex) // Attempt to re-allocate Transform on error
                         {
-                            successPos = false;
+                            TryRefreshSkeletonRoot(ex);
                         }
                     }
                 }
 
                 IsError = !successRot || !successPos;
             };
+        }
+
+        private void TryRefreshSkeletonRoot(Exception positionEx)
+        {
+            try
+            {
+                var transformInternal = SkeletonRoot.TransformInternal;
+                SkeletonRoot = new UnityTransform(transformInternal);
+            }
+            catch (Exception refreshEx)
+            {
+                if (_skeletonRootErrorRateLimit.TryEnter())
+                {
+                    Logging.WriteLine(
+                        $"ERROR getting Player '{Name}' SkeletonRoot Position; refresh failed: {positionEx.Message} | {refreshEx.Message}");
+                }
+                return;
+            }
+
+            if (_skeletonRootErrorRateLimit.TryEnter())
+            {
+                Logging.WriteLine(
+                    $"WARNING - Refreshed SkeletonRoot Transform for Player '{Name}' after invalid position: {positionEx.Message}");
+            }
         }
 
         /// <summary>
