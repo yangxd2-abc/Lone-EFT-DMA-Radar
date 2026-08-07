@@ -170,12 +170,20 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             ]),
 
             // Lone's InteractiveLootItem = silk's LootItem→InteractiveLootItem
-            C("LootItem", [F("_item")], cs: "InteractiveLootItem"),
+            C("LootItem", [
+                F("_item"),
+                F("_startPosition"),
+            ], cs: "InteractiveLootItem"),
 
             // Lone's DizSkinningSkeleton = silk's Skeleton→DizSkinningSkeleton
             C("Skeleton", [F("_values")], cs: "DizSkinningSkeleton"),
 
             C("LootableContainer", [F("ItemOwner")]),
+
+            C("WorldInteractiveObject", [
+                F("interactPosition1", "InteractPosition1"),
+                F("interactPosition2", "InteractPosition2"),
+            ]),
 
             C("ItemController", [F("<RootItem>k__BackingField", "RootItem")]),
 
@@ -189,6 +197,17 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
             ]),
 
             C("PlayerBody", [F("SkeletonRootJoint")]),
+
+            C("OpticCameraManager", [
+                F("<Camera>k__BackingField", "Camera"),
+                F("<CurrentOpticSight>k__BackingField", "CurrentOpticSight"),
+            ]),
+
+            C("CameraManager", [
+                F("<OpticCameraManager>k__BackingField", "OpticCameraManager"),
+                F("<Camera>k__BackingField", "Camera"),
+                M("get_Instance", "GetInstance_RVA"),
+            ], cs: "EFTCameraManager"),
 
             // GamePlayerOwner — obfuscated singleton; resolved via TypeIndex
             C("GamePlayerOwner", [F("_myPlayer")], s: true, ti: Offsets.Special.GamePlayerOwner_TypeIndex),

@@ -86,6 +86,10 @@ namespace LoneEftDmaRadar.Misc.Workers
                 {
                     OnPerformWork();
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // Expected when the owning worker is stopped between raid instances.
+                }
                 catch (Exception ex)
                 {
                     Logging.WriteLine($"[WorkerThread] WARNING: Unhandled exception on '{Name}' thread: {ex}");

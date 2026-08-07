@@ -104,12 +104,12 @@ namespace LoneEftDmaRadar.DMA
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show(
-                            messageBoxText: $"WARNING: Failed to initialize InputManager (win32). Please note, this only works on Windows 11 (Game PC). Startup will continue without hotkeys.\n\n{ex}",
-                            caption: Program.Name,
-                            button: MessageBoxButton.OK,
-                            icon: MessageBoxImage.Warning,
-                            options: MessageBoxOptions.DefaultDesktopOnly);
+                        // Remote hotkeys require a Windows 11 game PC. On unsupported
+                        // systems (such as Windows 10), continue without interrupting
+                        // startup with a modal warning.
+                        Logging.WriteLine(
+                            "[DMA] Remote hotkeys disabled (the target Windows version " +
+                            $"does not expose the required input state). {ex.GetType().Name}");
                     }
                     ProcessStopped += MemDMA_ProcessStopped;
                     RaidStarted += Memory_RaidStarted;

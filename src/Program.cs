@@ -140,17 +140,15 @@ namespace LoneEftDmaRadar
         }
 
         /// <summary>
-        /// Sets High Performance mode in Windows Power Plans and Process Priority.
+        /// Applies process-local performance settings without changing the user's
+        /// display state or active Windows power plan.
         /// </summary>
         private static void SetHighPerformanceMode()
         {
             /// Prepare Process for High Performance Mode
             Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
-            if (SetThreadExecutionState(EXECUTION_STATE.ES_CONTINUOUS | EXECUTION_STATE.ES_SYSTEM_REQUIRED | EXECUTION_STATE.ES_DISPLAY_REQUIRED) == 0)
+            if (SetThreadExecutionState(EXECUTION_STATE.ES_CONTINUOUS | EXECUTION_STATE.ES_SYSTEM_REQUIRED) == 0)
                 Logging.WriteLine($"WARNING: Unable to set Thread Execution State. This may cause performance issues. ERROR {Marshal.GetLastWin32Error()}");
-            Guid highPerformanceGuid = new("8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c");
-            if (PowerSetActiveScheme(IntPtr.Zero, ref highPerformanceGuid) != 0)
-                Logging.WriteLine($"WARNING: Unable to set High Performance Power Plan. This may cause performance issues. ERROR {Marshal.GetLastWin32Error()}");
             if (TimeBeginPeriod(5) != 0)
                 Logging.WriteLine($"WARNING: Unable to set timer resolution to 5ms. This may cause performance issues. ERROR {Marshal.GetLastWin32Error()}");
             if (AvSetMmThreadCharacteristicsW("Games", out _) == 0)
@@ -217,7 +215,6 @@ namespace LoneEftDmaRadar
         {
             ES_AWAYMODE_REQUIRED = 0x00000040,
             ES_CONTINUOUS = 0x80000000,
-            ES_DISPLAY_REQUIRED = 0x00000002,
             ES_SYSTEM_REQUIRED = 0x00000001
             // Legacy flag, should not be used.
             // ES_USER_PRESENT = 0x00000004
@@ -225,9 +222,6 @@ namespace LoneEftDmaRadar
 
         [LibraryImport("avrt.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
         private static partial IntPtr AvSetMmThreadCharacteristicsW(string taskName, out uint taskIndex);
-
-        [LibraryImport("powrprof.dll", SetLastError = true)]
-        private static partial uint PowerSetActiveScheme(IntPtr userRootPowerKey, ref Guid schemeGuid);
 
         [LibraryImport("winmm.dll", EntryPoint = "timeBeginPeriod", SetLastError = true)]
         private static partial uint TimeBeginPeriod(uint uMilliseconds);

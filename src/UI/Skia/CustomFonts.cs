@@ -23,11 +23,18 @@ namespace LoneEftDmaRadar.UI.Skia
                     neoSansStdRegular = new byte[stream!.Length];
                     stream.ReadExactly(neoSansStdRegular);
                 }
-                NeoSansStdRegular = SKTypeface.FromStream(new MemoryStream(neoSansStdRegular, false));
+                NeoSansStdRegular =
+                    SKTypeface.FromStream(new MemoryStream(neoSansStdRegular, false)) ??
+                    SKTypeface.Default;
             }
             catch (Exception ex)
             {
-                throw new InvalidOperationException("ERROR Loading Custom Fonts!", ex);
+                // The custom font is optional. A missing resource must not poison the
+                // static font initializer and break every subsequent render frame.
+                NeoSansStdRegular = SKTypeface.Default;
+                Logging.WriteLine(
+                    $"[CustomFonts] NeoSans resource unavailable; using the system default font. " +
+                    $"{ex.Message}");
             }
         }
     }

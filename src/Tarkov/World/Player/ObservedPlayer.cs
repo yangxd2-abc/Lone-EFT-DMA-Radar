@@ -97,9 +97,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
             MovementContext = GetMovementContext();
             RotationAddress = ValidateRotationAddr(MovementContext + Offsets.ObservedPlayerStateContext.Rotation);
             /// Setup Transform
-            var ti = Memory.ReadPtrChain(this, false, _transformInternalChain);
-            SkeletonRoot = new UnityTransform(ti);
-            _ = SkeletonRoot.UpdatePosition();
+            InitializeSkeleton(Offsets.ObservedPlayerView.PlayerBody);
 
             bool isAI = Memory.ReadValue<bool>(this + Offsets.ObservedPlayerView.IsAI);
             IsHuman = !isAI;
@@ -274,16 +272,6 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
                 Logging.WriteLine($"ERROR updating Health Status for '{Name}': {ex}");
             }
         }
-
-        private static readonly uint[] _transformInternalChain =
-        [
-            Offsets.ObservedPlayerView.PlayerBody,
-            Offsets.PlayerBody.SkeletonRootJoint,
-            Offsets.DizSkinningSkeleton._values,
-            UnityList<byte>.ArrOffset,
-            UnityList<byte>.ArrStartOffset + (uint)Bones.HumanBase * 0x8,
-            0x10
-        ];
 
         #region AI Player Roles
 

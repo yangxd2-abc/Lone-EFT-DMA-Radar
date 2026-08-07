@@ -205,9 +205,9 @@ namespace LoneEftDmaRadar.Tarkov
 
         /// <summary>
         /// Loads updated Game/FilteredLoot Data from the web and sets the static dictionaries.
+        /// Failures are non-fatal because disk or embedded data has already been loaded.
         /// </summary>
         /// <returns></returns>
-        /// <exception cref="InvalidOperationException"></exception>
         private static async Task LoadRemoteDataAsync()
         {
             try
@@ -236,15 +236,16 @@ namespace LoneEftDmaRadar.Tarkov
                         overwrite: true);
                 }
                 SetData(data);
+                Logging.WriteLine(
+                    $"[TarkovDataManager] Refreshed json.tarkov.dev PVE data: " +
+                    $"{data.Items?.Count ?? 0} items/containers, " +
+                    $"{data.Maps?.Count ?? 0} maps, {data.Tasks?.Count ?? 0} tasks.");
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    messageBoxText: $"An unhandled exception occurred while retrieving updated Game/Loot Data from the web: {ex}",
-                    caption: Program.Name,
-                    button: MessageBoxButton.OK,
-                    icon: MessageBoxImage.Warning,
-                    options: MessageBoxOptions.DefaultDesktopOnly);
+                Logging.WriteLine(
+                    $"[TarkovDataManager] Remote Game/Loot Data refresh failed; " +
+                    $"continuing with the data already loaded from disk or embedded resources. {ex}");
             }
         }
 

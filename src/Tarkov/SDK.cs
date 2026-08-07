@@ -9,8 +9,8 @@ namespace SDK
             public static uint LootList = 0x1B0; // object
             public static uint RegisteredPlayers = 0x1D0; // object
             public static uint MainPlayer = 0x230; // object
-            public static uint SynchronizableObjectLogicProcessor = 0x270; // object
-            public static uint Grenades = 0x2B0; // object
+            public static uint SynchronizableObjectLogicProcessor = 0x278; // object
+            public static uint Grenades = 0x2B8; // object
         }
 
         public readonly partial struct SynchronizableObject
@@ -53,32 +53,32 @@ namespace SDK
         public readonly partial struct Player
         {
             public static uint MovementContext = 0x60; // object
-            public static uint _playerBody = 0x198; // object
-            public static uint GameWorld = 0x688; // object
-            public static uint Corpse = 0x720; // object
-            public static uint Location = 0x920; // string
-            public static uint Profile = 0x9B8; // object
-            public static uint _handsController = 0xA38; // object
-            public static uint _playerLookRaycastTransform = 0xAC8; // object
+            public static uint _playerBody = 0x1A0; // object
+            public static uint GameWorld = 0x690; // object
+            public static uint Corpse = 0x728; // object
+            public static uint Location = 0x928; // string
+            public static uint Profile = 0x9C0; // object
+            public static uint _handsController = 0xA40; // object
+            public static uint _playerLookRaycastTransform = 0xAD8; // object
         }
 
         public readonly partial struct ObservedPlayerView
         {
             public static uint ObservedPlayerController = 0x28; // object
             public static uint Voice = 0x40; // string
-            public static uint Id = 0x7C; // int32_t
-            public static uint Side = 0x94; // object
-            public static uint IsAI = 0xA0; // bool
-            public static uint PlayerBody = 0xD8; // object
+            public static uint Id = 0x90; // int32_t
+            public static uint Side = 0xB4; // object
+            public static uint IsAI = 0xC0; // bool
+            public static uint PlayerBody = 0xF8; // object
         }
 
         public readonly partial struct ObservedPlayerController
         {
             public static uint InventoryController = 0x10; // object
             public static uint PlayerView = 0x18; // object
-            public static uint MovementController = 0xD8; // object
-            public static uint HealthController = 0xE8; // object
-            public static uint HandsController = 0x120; // object
+            public static uint MovementController = 0xF0; // object
+            public static uint HealthController = 0x100; // object
+            public static uint HandsController = 0x140; // object
         }
 
         public readonly partial struct ObservedPlayerHandsController
@@ -109,7 +109,7 @@ namespace SDK
 
         public readonly partial struct ObservedPlayerMovementController
         {
-            public static uint ObservedPlayerStateContext = 0x98; // object
+            public static uint ObservedPlayerStateContext = 0xB0; // object
         }
 
         public readonly partial struct ObservedPlayerStateContext
@@ -120,8 +120,8 @@ namespace SDK
         public readonly partial struct ObservedHealthController
         {
             public static uint HealthStatus = 0x10; // object
-            public static uint _player = 0x18; // object
-            public static uint _playerCorpse = 0x20; // object
+            public static uint _player = 0x40; // object
+            public static uint _playerCorpse = 0x48; // object
         }
 
         public readonly partial struct Profile
@@ -130,12 +130,12 @@ namespace SDK
             public static uint AccountId = 0x18; // string
             public static uint Info = 0x48; // object
             public static uint QuestsData = 0x98; // object
-            public static uint WishlistManager = 0x108; // object
+            public static uint WishlistManager = 0x130; // object
         }
 
         public readonly partial struct WishlistManager
         {
-            public static uint _wishlistItems = 0x28; // object
+            public static uint _wishlistItems = 0x30; // object
         }
 
         public readonly partial struct PlayerInfo
@@ -161,6 +161,7 @@ namespace SDK
         public readonly partial struct InteractiveLootItem
         {
             public static uint _item = 0xF0; // object
+            public static uint _startPosition = 0x10C; // Vector3
         }
 
         public readonly partial struct DizSkinningSkeleton
@@ -171,6 +172,12 @@ namespace SDK
         public readonly partial struct LootableContainer
         {
             public static uint ItemOwner = 0x178; // object
+        }
+
+        public readonly partial struct WorldInteractiveObject
+        {
+            public static uint InteractPosition1 = 0x80; // Vector3
+            public static uint InteractPosition2 = 0x8C; // Vector3
         }
 
         public readonly partial struct ItemController
@@ -195,6 +202,19 @@ namespace SDK
             public static uint SkeletonRootJoint = 0x30; // object
         }
 
+        public readonly partial struct OpticCameraManager
+        {
+            public static uint Camera = 0x70; // object
+            public static uint CurrentOpticSight = 0x78; // object
+        }
+
+        public readonly partial struct EFTCameraManager
+        {
+            public static uint OpticCameraManager = 0x10; // object
+            public static uint Camera = 0x70; // object
+            public static ulong GetInstance_RVA = 0x2CF8AB0;
+        }
+
         public readonly partial struct GamePlayerOwner
         {
             public static uint _myPlayer = 0x8; // object
@@ -209,7 +229,7 @@ namespace SDK
         /// </summary>
         public readonly partial struct Special
         {
-            public static ulong TypeInfoTableRva = 0x598BAD8;
+            public static ulong TypeInfoTableRva = 0x6FF7A30;
             public static uint GamePlayerOwner_TypeIndex = 0;
             public static uint EFTHardSettings_TypeIndex = 0;
             public static uint WeatherController_TypeIndex = 0;
@@ -250,6 +270,9 @@ namespace SDK
             BigPipe = 65536,
             BlackDivision = 131072,
             VSRF = 262144,
+            Civilian = 524288,
+            GasGrenade = 1048576,
+            FlashGrenade = 2097152,
         }
 
         [Flags]

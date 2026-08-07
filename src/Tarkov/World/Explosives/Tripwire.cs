@@ -34,11 +34,11 @@ namespace LoneEftDmaRadar.Tarkov.World.Explosives
             _position.ThrowIfAbnormal("Tripwire Position");
         }
 
-        public void OnRefresh(VmmScatter scatter)
+        public bool OnRefresh(VmmScatter scatter)
         {
             if (_destroyed)
             {
-                return;
+                return false;
             }
             scatter.PrepareReadValue<int>(this + Offsets.TripwireSynchronizableObject._tripwireState);
             scatter.Completed += (sender, s) =>
@@ -50,6 +50,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Explosives
                     _isActive = state is Enums.ETripwireState.Wait or Enums.ETripwireState.Active;
                 }
             };
+            return true;
         }
 
         #region Interfaces

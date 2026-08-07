@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web Radar Panel Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1217;
+      --panel: #171c22;
+      --panel-2: #202832;
+      --line: #344150;
+      --text: #edf3f7;
+      --muted: #9ba8b5;
+      --accent: #45b9c7;
+      --good: #61d36f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.35 "Segoe UI", Arial, sans-serif;
+    }
+    .window {
+      width: min(480px, calc(100vw - 24px));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 18px 45px rgba(0,0,0,.34);
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 11px;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--line);
+    }
+    h1 { margin: 0; font-size: 14px; }
+    a { margin-left: auto; color: var(--muted); text-decoration: none; }
+    .body { padding: 12px; }
+    .section-title {
+      margin: 0 0 10px;
+      color: #d7e0e8;
+      font-weight: 650;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 5px;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 130px 1fr;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 9px;
+    }
+    input {
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #10151b;
+      color: var(--text);
+      padding: 0 8px;
+      font: inherit;
+      min-width: 0;
+    }
+    input:disabled { opacity: .55; }
+    label.check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0 12px 130px;
+    }
+    button {
+      height: 32px;
+      min-width: 150px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #232c36;
+      color: var(--text);
+      font: inherit;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.running { background: #244f2c; border-color: var(--good); }
+    .url {
+      margin-top: 12px;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #10151b;
+      color: #d6e4ec;
+      word-break: break-all;
+    }
+    .muted { color: var(--muted); }
+    ul { margin: 8px 0 0 18px; padding: 0; color: var(--muted); }
+    li { margin: 4px 0; }
+    @media (max-width: 520px) {
+      .row { grid-template-columns: 1fr; }
+      label.check { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <section class="window">
+    <header><h1>Web Radar</h1><a href="index.html">Back</a></header>
+    <div class="body">
+      <div class="section-title">Web Radar Server</div>
+      <div class="row"><span>Bind Address:</span><input id="bind" value="0.0.0.0"></div>
+      <div class="row"><span>Port:</span><input id="port" value="55555" inputmode="numeric"></div>
+      <div class="row"><span>Tick Rate (Hz):</span><input id="tick" value="60" inputmode="numeric"></div>
+      <label class="check"><input id="upnp" type="checkbox" checked> Enable UPnP <span class="muted">(Automatic port forwarding)</span></label>
+      <div class="row"><span>Session Password:</span><input id="password" value="radar-demo"></div>
+      <button id="start">Start</button>
+      <div id="result" hidden>
+        <div class="url" id="url"></div>
+        <button id="copy" style="margin-top:8px;min-width:110px;">Copy URL</button>
+      </div>
+      <div class="section-title" style="margin-top:16px;">Instructions</div>
+      <ul>
+        <li>Configure the server settings above.</li>
+        <li>Click Start to generate a mock share URL.</li>
+        <li>This standalone page does not start a real local server.</li>
+      </ul>
+    </div>
+  </section>
+  <script>
+    const start = document.getElementById("start");
+    const result = document.getElementById("result");
+    const url = document.getElementById("url");
+    const fields = ["bind", "port", "tick", "password", "upnp"].map(id => document.getElementById(id));
+    start.addEventListener("click", () => {
+      if (start.classList.contains("running")) return;
+      start.textContent = "Starting...";
+      fields.forEach(field => field.disabled = true);
+      setTimeout(() => {
+        const host = "203.0.113.24";
+        const port = document.getElementById("port").value || "55555";
+        const password = encodeURIComponent(document.getElementById("password").value || "radar-demo");
+        url.textContent = `https://webradar.lone-dma.org?host=${host}&port=${port}&password=${password}`;
+        result.hidden = false;
+        start.textContent = "Running...";
+        start.classList.add("running");
+      }, 450);
+    });
+    document.getElementById("copy").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(url.textContent);
+        document.getElementById("copy").textContent = "Copied";
+      } catch {
+        document.getElementById("copy").textContent = "Select URL";
+      }
+    });
+  </script>
+</body>
+</html>

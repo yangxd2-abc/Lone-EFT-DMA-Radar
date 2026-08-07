@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings Panel Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1217;
+      --panel: #171c22;
+      --panel-2: #202832;
+      --line: #344150;
+      --text: #edf3f7;
+      --muted: #9ba8b5;
+      --accent: #45b9c7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.35 "Segoe UI", Arial, sans-serif;
+    }
+    .window {
+      width: min(760px, calc(100vw - 24px));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 18px 45px rgba(0,0,0,.34);
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 11px;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--line);
+    }
+    h1 { margin: 0; font-size: 14px; }
+    a { margin-left: auto; color: var(--muted); text-decoration: none; }
+    .tabs {
+      display: flex;
+      gap: 3px;
+      padding: 8px 10px 0;
+      border-bottom: 1px solid var(--line);
+      overflow-x: auto;
+    }
+    .tab {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-bottom: 0;
+      border-radius: 6px 6px 0 0;
+      background: #1d242d;
+      color: var(--muted);
+      padding: 6px 11px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .tab.active { color: var(--text); background: var(--panel); border-color: var(--accent); }
+    .pane { display: none; padding: 12px; min-height: 420px; }
+    .pane.active { display: block; }
+    .section-title {
+      margin: 10px 0 8px;
+      color: #d7e0e8;
+      font-weight: 650;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 5px;
+    }
+    .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #232c36;
+      color: var(--text);
+      font: inherit;
+      padding: 0 10px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 22px;
+    }
+    label { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+    .control { display: grid; grid-template-columns: 150px 1fr 48px; gap: 8px; align-items: center; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .list {
+      height: 190px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 8px;
+      background: #11171d;
+    }
+    .muted { color: var(--muted); }
+    @media (max-width: 680px) {
+      .grid, .control { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <section class="window">
+    <header><h1>Settings</h1><a href="index.html">Back</a></header>
+    <nav class="tabs">
+      <button class="tab active" data-tab="general">General</button>
+      <button class="tab" data-tab="players">Players</button>
+      <button class="tab" data-tab="loot">Loot</button>
+      <button class="tab" data-tab="containers">Containers</button>
+      <button class="tab" data-tab="quests">Quest Helper</button>
+      <button class="tab" data-tab="about">About</button>
+    </nav>
+    <section id="general" class="pane active">
+      <div class="section-title">Tools</div>
+      <div class="tools">
+        <button>Hotkey Manager</button><button>Color Picker</button><button>Map Setup Helper</button>
+        <button>Restart Radar</button><button>Backup Config</button><button>Open Config Folder</button><button>Re-dump IL2CPP Offsets</button>
+      </div>
+      <div class="section-title">Display Settings</div>
+      <div class="control"><span>Radar Scale</span><input type="range" min="0.5" max="2" step="0.1" value="1"><output>1.0</output></div>
+      <div class="control"><span>Menu Scale</span><input type="range" min="0.5" max="2" step="0.1" value="1"><output>1.0</output></div>
+      <div class="control"><span>Zoom (F1/F2)</span><input type="range" min="1" max="200" value="100"><output>100</output></div>
+      <div class="control"><span>Aimline Length</span><input type="range" min="0" max="1500" value="500"><output>500</output></div>
+      <div class="control"><span>Max Distance</span><input type="range" min="50" max="1500" step="25" value="800"><output>800</output></div>
+      <div class="section-title">Widgets</div>
+      <div class="grid">
+        <label><input type="checkbox" checked> Aimview Widget</label>
+        <label><input type="checkbox" checked> Player Info Widget</label>
+        <label><input type="checkbox" checked> Loot Widget</label>
+      </div>
+      <div class="section-title">Visibility</div>
+      <div class="grid">
+        <label><input type="checkbox" checked> Show Exfils</label>
+        <label><input type="checkbox" checked> Show Hazards</label>
+      </div>
+    </section>
+    <section id="players" class="pane">
+      <div class="section-title">Player Display</div>
+      <div class="grid">
+        <label><input type="checkbox" checked> Teammate Aimlines</label>
+        <label><input type="checkbox" checked> AI Aimlines</label>
+        <label><input type="checkbox" checked> Connect Groups</label>
+        <label><input type="checkbox" checked> Auto Groups</label>
+      </div>
+    </section>
+    <section id="loot" class="pane">
+      <div class="section-title">Loot Settings</div>
+      <div class="grid">
+        <label><input type="checkbox" checked> Show Loot (F3)</label>
+        <label><input type="checkbox" checked> Show Wishlist Items</label>
+      </div>
+    </section>
+    <section id="containers" class="pane">
+      <label><input type="checkbox" checked> Show Containers</label>
+      <div class="control"><span>Draw Distance</span><input type="range" min="10" max="500" value="250"><output>250</output></div>
+      <label><input type="checkbox"> Select All</label>
+      <div class="section-title">Container Types</div>
+      <div class="list">
+        <label><input type="checkbox" checked> Duffle bag</label>
+        <label><input type="checkbox" checked> Jacket</label>
+        <label><input type="checkbox" checked> Weapon box</label>
+        <label><input type="checkbox"> Cash register</label>
+        <label><input type="checkbox" checked> Safe</label>
+        <label><input type="checkbox" checked> Technical supply crate</label>
+      </div>
+    </section>
+    <section id="quests" class="pane">
+      <label><input type="checkbox" checked> Enable Quest Helper</label>
+      <div class="section-title">Active Quests</div>
+      <div class="list">
+        <label><input type="checkbox" checked> Shortage</label>
+        <label><input type="checkbox" checked> Checking</label>
+        <label><input type="checkbox"> Delivery from the Past</label>
+        <label><input type="checkbox" checked> Supplier</label>
+      </div>
+    </section>
+    <section id="about" class="pane">
+      <div class="section-title">Lone EFT DMA Radar</div>
+      <p class="muted">A compact standalone mock of the app settings pattern. Controls are local-only and kept small for quick UI iteration.</p>
+      <button>Visit Website</button>
+    </section>
+  </section>
+  <script>
+    document.querySelectorAll(".tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab,.pane").forEach(x => x.classList.remove("active"));
+        tab.classList.add("active");
+        document.getElementById(tab.dataset.tab).classList.add("active");
+      });
+    });
+    document.querySelectorAll('input[type="range"]').forEach(range => {
+      const output = range.nextElementSibling;
+      const update = () => output.textContent = Number(range.value).toFixed(range.step === "0.1" ? 1 : 0);
+      range.addEventListener("input", update);
+      update();
+    });
+  </script>
+</body>
+</html>

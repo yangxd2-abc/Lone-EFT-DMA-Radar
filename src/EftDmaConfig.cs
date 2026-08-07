@@ -441,6 +441,18 @@ namespace LoneEftDmaRadar
         /// </summary>
         [JsonPropertyName("enabled")]
         public bool Enabled { get; set; } = true;
+
+        /// <summary>
+        /// Aimview screen zoom setting. 10 is native size and 100 is 10x zoom.
+        /// </summary>
+        [JsonPropertyName("playerScale")]
+        public float PlayerScale { get; set; } = 10f;
+
+        [JsonPropertyName("skeletonStrokeWidth")]
+        public float SkeletonStrokeWidth { get; set; } = 1.5f;
+
+        [JsonPropertyName("crosshairStrokeWidth")]
+        public float CrosshairStrokeWidth { get; set; } = 1f;
     }
 
 

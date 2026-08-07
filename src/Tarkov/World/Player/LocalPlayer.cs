@@ -125,15 +125,17 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
             {
                 if (Config.AimviewWidget.Enabled && _lookRaycastTransform is UnityTransform existing)
                 {
-                    round1.PrepareReadPtr(existing.TransformInternal + UnityOffsets.TransformAccess_HierarchyOffset); // Transform Hierarchy
+                    uint hierarchyOffset = UnityTransform.TransformAccessHierarchyOffset;
+                    uint verticesOffset = UnityTransform.HierarchyVerticesOffset;
+                    round1.PrepareReadPtr(existing.TransformInternal + hierarchyOffset); // Transform Hierarchy
                     round1.Completed += (sender, s1) =>
                     {
-                        if (s1.ReadPtr(existing.TransformInternal + UnityOffsets.TransformAccess_HierarchyOffset, out var tra))
+                        if (s1.ReadPtr(existing.TransformInternal + hierarchyOffset, out var tra))
                         {
-                            round2.PrepareReadPtr(tra + UnityOffsets.Hierarchy_VerticesOffset); // Vertices Ptr
+                            round2.PrepareReadPtr(tra + verticesOffset); // Vertices Ptr
                             round2.Completed += (sender, s2) =>
                             {
-                                if (s2.ReadPtr(tra + UnityOffsets.Hierarchy_VerticesOffset, out var verticesPtr))
+                                if (s2.ReadPtr(tra + verticesOffset, out var verticesPtr))
                                 {
                                     if (existing.VerticesAddr != verticesPtr) // check if any addr changed
                                     {

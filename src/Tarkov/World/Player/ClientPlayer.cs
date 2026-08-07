@@ -60,9 +60,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
                 MovementContext = GetMovementContext();
                 RotationAddress = ValidateRotationAddr(MovementContext + Offsets.MovementContext._rotation);
                 /// Setup Transform
-                var ti = Memory.ReadPtrChain(this, false, _transformInternalChain);
-                SkeletonRoot = new UnityTransform(ti);
-                _ = SkeletonRoot.UpdatePosition();
+                InitializeSkeleton(Offsets.Player._playerBody);
             }
             catch (Exception ex)
             {
@@ -115,15 +113,6 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
             }
         }
 
-        private static readonly uint[] _transformInternalChain =
-        [
-            Offsets.Player._playerBody,
-            Offsets.PlayerBody.SkeletonRootJoint,
-            Offsets.DizSkinningSkeleton._values,
-            UnityList<byte>.ArrOffset,
-            UnityList<byte>.ArrStartOffset + (uint)Bones.HumanBase * 0x8,
-            0x10
-        ];
     }
 }
 

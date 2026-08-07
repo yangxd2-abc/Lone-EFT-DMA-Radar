@@ -41,6 +41,9 @@ namespace LoneEftDmaRadar.Tarkov.World
         private readonly WorkerThread _t1;
         private readonly WorkerThread _t2;
         private readonly WorkerThread _t3;
+        private CameraManager _cameraManager;
+        private DateTime _nextCameraResolveAttempt;
+        private readonly RateLimiter _btrErrorRateLimit = new(TimeSpan.FromSeconds(10));
 
         /// <summary>
         /// Map ID of Current Map.
@@ -51,6 +54,7 @@ namespace LoneEftDmaRadar.Tarkov.World
         public IReadOnlyCollection<AbstractPlayer> Players => _rgtPlayers;
         public IReadOnlyCollection<IExplosiveItem> Explosives => _explosivesManager;
         public LocalPlayer LocalPlayer => _rgtPlayers.LocalPlayer;
+        public CameraManager CameraManager => _cameraManager;
         public LootManager Loot { get; }
         public QuestManager QuestManager { get; }
         public IReadOnlyCollection<IExitPoint> Exits { get; }
@@ -181,7 +185,11 @@ namespace LoneEftDmaRadar.Tarkov.World
                 }
                 catch (Exception ex)
                 {
-                    if (ex is InvalidOperationException { InnerException.Message: "GameWorld not found." })
+                    if (ex is InvalidOperationException { InnerException.Message: "GameWorld not found." } ||
+                        ex is InvalidOperationException
+                        {
+                            InnerException: ArgumentOutOfRangeException { ParamName: "_rgtPlayers" }
+                        })
                         Logging.WriteLine("Waiting for GameWorld...");
                     else
                         Logging.WriteLine($"ERROR Instantiating Game Instance: {ex}");
@@ -288,16 +296,38 @@ namespace LoneEftDmaRadar.Tarkov.World
                 {
                     return;
                 }
-                // OK -> Process
-                var btrController = Memory.ReadPtr(this + Offsets.GameWorld.BtrController);
-                var btrView = Memory.ReadPtr(btrController + Offsets.BtrController.BtrView);
-                var btrTurretView = Memory.ReadPtr(btrView + Offsets.BTRView.turret);
-                var btrOperator = Memory.ReadPtr(btrTurretView + Offsets.BTRTurretView._bot);
+                // The controller/view chain is legitimately null before a BTR spawns.
+                // Read raw pointer values and quietly retry on a later refresh.
+                var btrController = Memory.ReadValue<ulong>(
+                    this + Offsets.GameWorld.BtrController,
+                    false);
+                if (!btrController.IsValidUserVA())
+                    return;
+
+                var btrView = Memory.ReadValue<ulong>(
+                    btrController + Offsets.BtrController.BtrView,
+                    false);
+                if (!btrView.IsValidUserVA())
+                    return;
+
+                var btrTurretView = Memory.ReadValue<ulong>(
+                    btrView + Offsets.BTRView.turret,
+                    false);
+                if (!btrTurretView.IsValidUserVA())
+                    return;
+
+                var btrOperator = Memory.ReadValue<ulong>(
+                    btrTurretView + Offsets.BTRTurretView._bot,
+                    false);
+                if (!btrOperator.IsValidUserVA())
+                    return;
+
                 _rgtPlayers.TryAllocateBTR(btrView, btrOperator);
             }
             catch (Exception ex)
             {
-                Logging.WriteLine($"ERROR Allocating BTR: {ex}");
+                if (_btrErrorRateLimit.TryEnter())
+                    Logging.WriteLine($"ERROR Allocating BTR: {ex}");
             }
         }
 
@@ -313,6 +343,8 @@ namespace LoneEftDmaRadar.Tarkov.World
             bool hasPlayers = false;
 
             using var scatter = Memory.CreateScatter(VmmFlags.NOCACHE);
+            TryInitializeCameraManager();
+            _cameraManager?.OnRealtimeLoop(scatter);
             foreach (var player in _rgtPlayers)
             {
                 if (player.IsActive && player.IsAlive)
@@ -329,6 +361,26 @@ namespace LoneEftDmaRadar.Tarkov.World
             }
 
             scatter.Execute();
+        }
+
+        /// <summary>
+        /// Camera objects can be created after GameWorld, so resolution is retried without
+        /// allowing a missing or stale camera to interrupt raid processing.
+        /// </summary>
+        private void TryInitializeCameraManager()
+        {
+            if (_cameraManager is not null || DateTime.UtcNow < _nextCameraResolveAttempt)
+                return;
+
+            _nextCameraResolveAttempt = DateTime.UtcNow.AddSeconds(5);
+            try
+            {
+                _cameraManager = new CameraManager();
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteLine($"[GameWorld] CameraManager is not ready: {ex.Message}");
+            }
         }
 
         #endregion

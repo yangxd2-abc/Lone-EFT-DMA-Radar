@@ -3,6 +3,7 @@
  * Licensed under GNU AGPLv3. See https://www.gnu.org/licenses/agpl-3.0.html
  */
 using LoneEftDmaRadar.Misc;
+using System.Buffers.Binary;
 using VmmSharpEx.Extensions;
 
 namespace LoneEftDmaRadar.Tarkov.Unity.Structures
@@ -10,6 +11,15 @@ namespace LoneEftDmaRadar.Tarkov.Unity.Structures
     public sealed class UnityTransform
     {
         private const int MAX_ITERATIONS = 4000;
+        private const int MAX_TRANSFORM_INDEX = 128000;
+        private const int MAX_SCANNED_TRANSFORM_INDEX = 16384;
+        private const uint MAX_LAYOUT_SCAN_OFFSET = 0x100;
+        private static readonly object _layoutSync = new();
+        private static TransformLayout _layout = new(
+            UnityOffsets.TransformAccess_IndexOffset,
+            UnityOffsets.TransformAccess_HierarchyOffset,
+            UnityOffsets.Hierarchy_VerticesOffset,
+            UnityOffsets.Hierarchy_IndicesOffset);
         private readonly bool _useCache;
         private readonly int _index;
         private readonly ulong _hierarchyAddr;
@@ -23,23 +33,236 @@ namespace LoneEftDmaRadar.Tarkov.Unity.Structures
 
         public UnityTransform(ulong transformInternal, bool useCache = false)
         {
-            //Logging.WriteLine(transformInternal.ToString("X"));
             /// Constructor
             TransformInternal = transformInternal;
             _useCache = useCache;
 
-            var ta = Memory.ReadValue<TransformAccess>(transformInternal, useCache);
-            ArgumentOutOfRangeException.ThrowIfGreaterThan(ta.Index, 128000, nameof(ta.Index)); // Sanity check since this is used to size vertices reads
-            _index = ta.Index;
-            ta.Hierarchy.ThrowIfInvalidUserVA(nameof(ta.Hierarchy));
-            _hierarchyAddr = ta.Hierarchy;
-            var transformHierarchy = Memory.ReadValue<TransformHierarchy>(_hierarchyAddr, useCache);
-            transformHierarchy.Vertices.ThrowIfInvalidUserVA(nameof(transformHierarchy.Vertices));
-            transformHierarchy.Indices.ThrowIfInvalidUserVA(nameof(transformHierarchy.Indices));
-            IndicesAddr = transformHierarchy.Indices;
-            VerticesAddr = transformHierarchy.Vertices;
+            var resolved = ResolveLayout(transformInternal, useCache);
+            _index = resolved.Index;
+            _hierarchyAddr = resolved.Hierarchy;
+            IndicesAddr = resolved.Indices;
+            VerticesAddr = resolved.Vertices;
             /// Populate Indices once for the Life of the Transform.
             _indices = ReadIndices();
+        }
+
+        /// <summary>
+        /// Runtime-resolved native Unity Transform layout. These can change independently
+        /// of the managed IL2CPP field offsets after a Unity/game update.
+        /// </summary>
+        public static uint TransformAccessHierarchyOffset => _layout.HierarchyOffset;
+        public static uint HierarchyVerticesOffset => _layout.VerticesOffset;
+
+        private static ResolvedTransform ResolveLayout(ulong transformInternal, bool useCache)
+        {
+            var layout = _layout;
+            if (TryReadTransform(transformInternal, layout, useCache, MAX_TRANSFORM_INDEX, out var resolved))
+                return resolved;
+
+            lock (_layoutSync)
+            {
+                layout = _layout;
+                if (TryReadTransform(transformInternal, layout, false, MAX_TRANSFORM_INDEX, out resolved))
+                    return resolved;
+
+                if (!TryScanLayout(transformInternal, out layout, out resolved))
+                {
+                    throw new InvalidOperationException(
+                        $"Unable to resolve native Unity Transform layout for 0x{transformInternal:X}. " +
+                        $"Fallback offsets: hierarchy=0x{_layout.HierarchyOffset:X}, index=0x{_layout.IndexOffset:X}, " +
+                        $"vertices=0x{_layout.VerticesOffset:X}, indices=0x{_layout.IndicesOffset:X}.");
+                }
+
+                _layout = layout;
+                Logging.WriteLine(
+                    $"[UnityTransform] Native layout resolved: " +
+                    $"hierarchy=0x{layout.HierarchyOffset:X}, index=0x{layout.IndexOffset:X}, " +
+                    $"vertices=0x{layout.VerticesOffset:X}, indices=0x{layout.IndicesOffset:X}");
+                return resolved;
+            }
+        }
+
+        private static bool TryScanLayout(
+            ulong transformInternal,
+            out TransformLayout layout,
+            out ResolvedTransform resolved)
+        {
+            layout = default;
+            resolved = default;
+
+            Span<byte> access = stackalloc byte[(int)MAX_LAYOUT_SCAN_OFFSET + sizeof(ulong)];
+            try
+            {
+                Memory.ReadSpan(transformInternal, access, false);
+            }
+            catch
+            {
+                return false;
+            }
+
+            // Unity normally stores the hierarchy pointer immediately before its index.
+            // Prefer that shape, then fall back to independent offsets for layout changes.
+            for (uint hierarchyOffset = 0; hierarchyOffset <= MAX_LAYOUT_SCAN_OFFSET; hierarchyOffset += 8)
+            {
+                ulong hierarchy = ReadUInt64(access, hierarchyOffset);
+                if (!hierarchy.IsValidUserVA())
+                    continue;
+
+                uint indexOffset = hierarchyOffset + 8;
+                if (indexOffset <= MAX_LAYOUT_SCAN_OFFSET &&
+                    TryResolveHierarchy(transformInternal, hierarchy, indexOffset, access, out layout, out resolved))
+                {
+                    return true;
+                }
+            }
+
+            for (uint hierarchyOffset = 0; hierarchyOffset <= MAX_LAYOUT_SCAN_OFFSET; hierarchyOffset += 8)
+            {
+                ulong hierarchy = ReadUInt64(access, hierarchyOffset);
+                if (!hierarchy.IsValidUserVA())
+                    continue;
+
+                for (uint indexOffset = 0; indexOffset <= MAX_LAYOUT_SCAN_OFFSET; indexOffset += 4)
+                {
+                    if (TryResolveHierarchy(transformInternal, hierarchy, indexOffset, access, out layout, out resolved))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryResolveHierarchy(
+            ulong transformInternal,
+            ulong hierarchy,
+            uint indexOffset,
+            ReadOnlySpan<byte> access,
+            out TransformLayout layout,
+            out ResolvedTransform resolved)
+        {
+            layout = default;
+            resolved = default;
+            int index = ReadInt32(access, indexOffset);
+            if ((uint)index > MAX_SCANNED_TRANSFORM_INDEX)
+                return false;
+
+            Span<byte> hierarchyData = stackalloc byte[(int)MAX_LAYOUT_SCAN_OFFSET + sizeof(ulong)];
+            try
+            {
+                Memory.ReadSpan(hierarchy, hierarchyData, false);
+            }
+            catch
+            {
+                return false;
+            }
+
+            for (uint verticesOffset = 0; verticesOffset <= MAX_LAYOUT_SCAN_OFFSET; verticesOffset += 8)
+            {
+                ulong vertices = ReadUInt64(hierarchyData, verticesOffset);
+                if (!vertices.IsValidUserVA())
+                    continue;
+
+                for (uint indicesOffset = 0; indicesOffset <= MAX_LAYOUT_SCAN_OFFSET; indicesOffset += 8)
+                {
+                    if (indicesOffset == verticesOffset)
+                        continue;
+
+                    ulong indices = ReadUInt64(hierarchyData, indicesOffset);
+                    if (!indices.IsValidUserVA() || !ValidateTransformData(index, vertices, indices))
+                        continue;
+
+                    uint hierarchyOffset = FindPointerOffset(access, hierarchy);
+                    layout = new(indexOffset, hierarchyOffset, verticesOffset, indicesOffset);
+                    resolved = new(index, hierarchy, vertices, indices);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryReadTransform(
+            ulong transformInternal,
+            TransformLayout layout,
+            bool useCache,
+            int maxIndex,
+            out ResolvedTransform resolved)
+        {
+            resolved = default;
+            try
+            {
+                int index = Memory.ReadValue<int>(transformInternal + layout.IndexOffset, useCache);
+                if ((uint)index > (uint)maxIndex)
+                    return false;
+
+                ulong hierarchy = Memory.ReadValue<ulong>(transformInternal + layout.HierarchyOffset, useCache);
+                if (!hierarchy.IsValidUserVA())
+                    return false;
+
+                ulong vertices = Memory.ReadValue<ulong>(hierarchy + layout.VerticesOffset, useCache);
+                ulong indices = Memory.ReadValue<ulong>(hierarchy + layout.IndicesOffset, useCache);
+                if (!vertices.IsValidUserVA() || !indices.IsValidUserVA() ||
+                    !ValidateTransformData(index, vertices, indices, useCache))
+                {
+                    return false;
+                }
+
+                resolved = new(index, hierarchy, vertices, indices);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool ValidateTransformData(int index, ulong vertices, ulong indices, bool useCache = false)
+        {
+            try
+            {
+                int rootParent = Memory.ReadValue<int>(indices, useCache);
+                int parent = Memory.ReadValue<int>(indices + (uint)index * sizeof(int), useCache);
+                if (rootParent != -1 || parent < -1 || parent >= index)
+                    return false;
+
+                var root = Memory.ReadValue<TrsX>(vertices, useCache);
+                var value = Memory.ReadValue<TrsX>(vertices + (uint)index * (uint)Unsafe.SizeOf<TrsX>(), useCache);
+                return IsReasonableTrs(root) && IsReasonableTrs(value);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsReasonable(Vector3 value, float max) =>
+            value.IsNormalOrZero() &&
+            MathF.Abs(value.X) <= max && MathF.Abs(value.Y) <= max && MathF.Abs(value.Z) <= max;
+
+        private static bool IsReasonableTrs(TrsX value)
+        {
+            float rotationLengthSquared = value.q.LengthSquared();
+            float scaleLengthSquared = value.s.LengthSquared();
+            return IsReasonable(value.t, 10_000_000f) &&
+                IsReasonable(value.s, 100_000f) &&
+                rotationLengthSquared is >= 0.25f and <= 2.25f &&
+                scaleLengthSquared is > 0.000001f;
+        }
+
+        private static ulong ReadUInt64(ReadOnlySpan<byte> data, uint offset) =>
+            BinaryPrimitives.ReadUInt64LittleEndian(data.Slice((int)offset, sizeof(ulong)));
+
+        private static int ReadInt32(ReadOnlySpan<byte> data, uint offset) =>
+            BinaryPrimitives.ReadInt32LittleEndian(data.Slice((int)offset, sizeof(int)));
+
+        private static uint FindPointerOffset(ReadOnlySpan<byte> data, ulong value)
+        {
+            for (uint offset = 0; offset <= MAX_LAYOUT_SCAN_OFFSET; offset += 8)
+            {
+                if (ReadUInt64(data, offset) == value)
+                    return offset;
+            }
+            return uint.MaxValue;
         }
 
         private ReadOnlySpan<int> Indices
@@ -286,23 +509,17 @@ namespace LoneEftDmaRadar.Tarkov.Unity.Structures
         #endregion
 
         #region Structures
-        [StructLayout(LayoutKind.Explicit)]
-        public readonly ref struct TransformAccess
-        {
-            [FieldOffset((int)UnityOffsets.TransformAccess_IndexOffset)]
-            public readonly int Index;
-            [FieldOffset((int)UnityOffsets.TransformAccess_HierarchyOffset)]
-            public readonly ulong Hierarchy;
-        }
+        private readonly record struct TransformLayout(
+            uint IndexOffset,
+            uint HierarchyOffset,
+            uint VerticesOffset,
+            uint IndicesOffset);
 
-        [StructLayout(LayoutKind.Explicit)]
-        public readonly ref struct TransformHierarchy
-        {
-            [FieldOffset((int)UnityOffsets.Hierarchy_VerticesOffset)]
-            public readonly ulong Vertices;
-            [FieldOffset((int)UnityOffsets.Hierarchy_IndicesOffset)]
-            public readonly ulong Indices;
-        }
+        private readonly record struct ResolvedTransform(
+            int Index,
+            ulong Hierarchy,
+            ulong Vertices,
+            ulong Indices);
 
         [StructLayout(LayoutKind.Explicit, Pack = 8, Size = 48)]
         public readonly struct TrsX

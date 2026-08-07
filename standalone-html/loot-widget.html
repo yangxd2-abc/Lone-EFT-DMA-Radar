@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loot Widget Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101317;
+      --panel: #171c22;
+      --panel-2: #202833;
+      --line: #344150;
+      --text: #edf3f7;
+      --muted: #9ba8b5;
+      --accent: #45b9c7;
+      --valuable: #40d6d1;
+      --wish: #74f05d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0d1116;
+      color: var(--text);
+      font: 13px/1.35 "Segoe UI", Arial, sans-serif;
+    }
+    a { color: var(--muted); text-decoration: none; }
+    .window {
+      width: min(560px, calc(100vw - 24px));
+      min-height: 460px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 18px 45px rgba(0,0,0,.34);
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 11px;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--line);
+    }
+    h1 { margin: 0; font-size: 14px; font-weight: 650; }
+    .spacer { flex: 1; }
+    .tabs {
+      display: flex;
+      gap: 3px;
+      padding: 8px 10px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .tab {
+      border: 1px solid var(--line);
+      border-bottom: 0;
+      border-radius: 6px 6px 0 0;
+      background: #1d242d;
+      color: var(--muted);
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    .tab.active { color: var(--text); background: var(--panel); border-color: var(--accent); }
+    .pane { display: none; padding: 10px; }
+    .pane.active { display: block; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+    input[type="search"], input[type="number"] {
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #10151b;
+      color: var(--text);
+      padding: 0 8px;
+      font: inherit;
+    }
+    button {
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #232c36;
+      color: var(--text);
+      font: inherit;
+      padding: 0 10px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td {
+      height: 27px;
+      padding: 4px 7px;
+      border: 1px solid rgba(255,255,255,.07);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    th {
+      background: #222a34;
+      color: #d8e1e9;
+      cursor: pointer;
+      user-select: none;
+    }
+    tbody tr:nth-child(even) { background: rgba(255,255,255,.025); }
+    tbody tr:hover { background: rgba(69,185,199,.12); }
+    .value, .dist { text-align: right; }
+    .valuable { color: var(--valuable); }
+    .wish { color: var(--wish); }
+    .options {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px 20px;
+      max-width: 480px;
+    }
+    label { display: flex; align-items: center; gap: 8px; color: var(--text); }
+    .field { display: grid; gap: 5px; color: var(--muted); }
+    .divider { grid-column: 1 / -1; height: 1px; background: var(--line); }
+    .radio-row { display: flex; gap: 14px; align-items: center; }
+  </style>
+</head>
+<body>
+  <section class="window">
+    <header>
+      <h1>Loot</h1>
+      <span class="spacer"></span>
+      <a href="index.html">Back</a>
+    </header>
+    <nav class="tabs">
+      <button class="tab active" data-tab="list">Loot List</button>
+      <button class="tab" data-tab="options">Options</button>
+    </nav>
+    <section id="list" class="pane active">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search item name" aria-label="Search loot">
+        <button id="clear">Clear</button>
+      </div>
+      <table>
+        <thead>
+          <tr><th data-sort="name">Name</th><th data-sort="value">Value</th><th data-sort="dist">Dist</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+    <section id="options" class="pane">
+      <div class="options">
+        <div class="field">
+          <span>Min Value</span>
+          <input type="number" value="50000" step="1000">
+        </div>
+        <div class="field">
+          <span>Valuable Min</span>
+          <input type="number" value="200000" step="1000">
+        </div>
+        <div class="divider"></div>
+        <label><input type="checkbox" checked> Price per Slot</label>
+        <div class="radio-row">
+          <label><input type="radio" name="mode" checked> Flea</label>
+          <label><input type="radio" name="mode"> Trader</label>
+        </div>
+        <div class="divider"></div>
+        <label><input type="checkbox"> Hide Corpses</label>
+        <label><input type="checkbox" checked> Show Meds</label>
+        <label><input type="checkbox" checked> Show Food</label>
+        <label><input type="checkbox" checked> Show Backpacks</label>
+        <label><input type="checkbox" checked> Show Quest Items</label>
+      </div>
+    </section>
+  </section>
+  <script>
+    const loot = [
+      { name: "Graphics card", value: 744000, dist: 37, tag: "valuable" },
+      { name: "LEDX Skin Transilluminator", value: 591000, dist: 64, tag: "wish" },
+      { name: "Injector case", value: 311000, dist: 91, tag: "valuable" },
+      { name: "Bottle of water", value: 14000, dist: 22, tag: "" },
+      { name: "Morphine injector", value: 12700, dist: 29, tag: "" },
+      { name: "Factory emergency exit key", value: 73000, dist: 118, tag: "valuable" },
+      { name: "Crye Precision AVS", value: 51600, dist: 48, tag: "" },
+      { name: "Dead Scav", value: 0, dist: 76, tag: "" },
+      { name: "Salewa first aid kit", value: 22900, dist: 33, tag: "" },
+      { name: "Quest flash drive", value: 0, dist: 105, tag: "wish" }
+    ];
+    let sortKey = "value";
+    let sortAsc = false;
+    const rows = document.getElementById("rows");
+    const search = document.getElementById("search");
+    function fmt(n) {
+      return n >= 1000 ? Math.round(n / 1000) + "k" : String(n);
+    }
+    function render() {
+      const q = search.value.trim().toLowerCase();
+      const items = loot
+        .filter(x => x.name.toLowerCase().includes(q))
+        .sort((a, b) => {
+          const av = a[sortKey], bv = b[sortKey];
+          const result = typeof av === "string" ? av.localeCompare(bv) : av - bv;
+          return sortAsc ? result : -result;
+        });
+      rows.innerHTML = items.map(item => `
+        <tr>
+          <td class="${item.tag}">${item.name}</td>
+          <td class="value">${fmt(item.value)}</td>
+          <td class="dist">${item.dist}</td>
+        </tr>`).join("");
+    }
+    document.querySelectorAll(".tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab,.pane").forEach(x => x.classList.remove("active"));
+        tab.classList.add("active");
+        document.getElementById(tab.dataset.tab).classList.add("active");
+      });
+    });
+    document.querySelectorAll("th").forEach(th => {
+      th.addEventListener("click", () => {
+        const key = th.dataset.sort;
+        sortAsc = sortKey === key ? !sortAsc : key === "name";
+        sortKey = key;
+        render();
+      });
+    });
+    search.addEventListener("input", render);
+    document.getElementById("clear").addEventListener("click", () => { search.value = ""; render(); });
+    render();
+  </script>
+</body>
+</html>

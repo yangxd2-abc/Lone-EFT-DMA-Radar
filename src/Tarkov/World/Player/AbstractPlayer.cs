@@ -5,6 +5,7 @@
 using Collections.Pooled;
 using LoneEftDmaRadar.Misc;
 using LoneEftDmaRadar.Tarkov.Unity;
+using LoneEftDmaRadar.Tarkov.Unity.Collections;
 using LoneEftDmaRadar.Tarkov.Unity.Structures;
 using LoneEftDmaRadar.Tarkov.World.Loot;
 using LoneEftDmaRadar.Tarkov.World.Player.Helpers;
@@ -23,8 +24,44 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
     /// </summary>
     public abstract class AbstractPlayer : IWorldEntity, IMapEntity, IMouseoverEntity
     {
+        private const int MAX_PLAYER_SKELETON_VERTEX_COUNT = 4096;
         private static readonly ConcurrentDictionary<ulong, DateTime> _allocationErrorLogTimes = new();
         private RateLimiter _skeletonRootErrorRateLimit = new(TimeSpan.FromSeconds(5));
+        private static readonly Bones[] _trackedSkeletonBones =
+        [
+            Bones.HumanBase,
+            Bones.HumanPelvis,
+            Bones.HumanLThigh2,
+            Bones.HumanLFoot,
+            Bones.HumanRThigh2,
+            Bones.HumanRFoot,
+            Bones.HumanSpine1,
+            Bones.HumanSpine2,
+            Bones.HumanSpine3,
+            Bones.HumanLCollarbone,
+            Bones.HumanLForearm2,
+            Bones.HumanLPalm,
+            Bones.HumanRCollarbone,
+            Bones.HumanRForearm2,
+            Bones.HumanRPalm,
+            Bones.HumanNeck,
+            Bones.HumanHead
+        ];
+        private sealed class SkeletonState
+        {
+            public SkeletonState(UnityTransform[] transforms, int vertexCount)
+            {
+                Transforms = transforms;
+                VertexCount = vertexCount;
+                Root = transforms[(int)Bones.HumanBase];
+            }
+
+            public UnityTransform[] Transforms { get; }
+            public UnityTransform Root { get; }
+            public int VertexCount { get; }
+        }
+
+        private SkeletonState _skeletonState;
 
         /// <summary>
         /// Group ID for Solo Players.
@@ -187,7 +224,25 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
         /// <summary>
         /// Player's Skeleton Root.
         /// </summary>
-        public UnityTransform SkeletonRoot { get; protected set; }
+        public UnityTransform SkeletonRoot => Volatile.Read(ref _skeletonState)?.Root;
+
+        /// <summary>
+        /// Gets the latest DMA-backed world position for a tracked player bone.
+        /// </summary>
+        public bool TryGetBonePosition(Bones bone, out Vector3 position)
+        {
+            position = default;
+            var state = Volatile.Read(ref _skeletonState);
+            int index = (int)bone;
+            if (state is null || (uint)index >= (uint)state.Transforms.Length ||
+                state.Transforms[index] is not UnityTransform transform)
+            {
+                return false;
+            }
+
+            position = transform.Position;
+            return position != default && position.IsNormalOrZero();
+        }
 
         /// <summary>
         /// TRUE if critical memory reads (position/rotation) have failed.
@@ -415,34 +470,86 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
         }
 
         /// <summary>
+        /// Initializes the root and Aimview bone transforms from the player's skeleton list.
+        /// The realtime loop updates every tracked bone from one shared DMA vertices read.
+        /// </summary>
+        protected void InitializeSkeleton(uint playerBodyOffset)
+        {
+            ulong skeletonValues = Memory.ReadPtrChain(this, false,
+                playerBodyOffset,
+                Offsets.PlayerBody.SkeletonRootJoint,
+                Offsets.DizSkinningSkeleton._values);
+
+            using var boneObjects = UnityList<ulong>.Create(skeletonValues, false);
+            if (boneObjects.Span.Length <= (int)Bones.HumanHead)
+                throw new ArgumentOutOfRangeException(nameof(boneObjects), "Player skeleton bone list is incomplete.");
+
+            var transforms = new UnityTransform[(int)Bones.HumanHead + 1];
+            ulong verticesAddr = 0;
+            int vertexCount = 0;
+
+            foreach (var bone in _trackedSkeletonBones)
+            {
+                ulong transformObject = boneObjects.Span[(int)bone];
+                transformObject.ThrowIfInvalidUserVA(nameof(transformObject));
+                ulong transformInternal = Memory.ReadPtr(transformObject + 0x10, false);
+                var transform = new UnityTransform(transformInternal);
+
+                if (verticesAddr == 0)
+                    verticesAddr = transform.VerticesAddr;
+                else if (verticesAddr != transform.VerticesAddr)
+                    throw new InvalidOperationException("Player bones do not share one transform hierarchy.");
+
+                transforms[(int)bone] = transform;
+                vertexCount = Math.Max(vertexCount, transform.Count);
+            }
+
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(
+                vertexCount, MAX_PLAYER_SKELETON_VERTEX_COUNT, nameof(vertexCount));
+
+            var state = new SkeletonState(transforms, vertexCount);
+            _ = state.Root.UpdatePosition();
+            Volatile.Write(ref _skeletonState, state);
+        }
+
+        /// <summary>
         /// Executed on each Realtime Loop.
         /// </summary>
         /// <param nickName="index">Scatter read index dedicated to this player.</param>
         public virtual void OnRealtimeLoop(VmmScatter scatter)
         {
-            var skeletonRoot = SkeletonRoot;
+            var skeletonState = Volatile.Read(ref _skeletonState);
+            if (skeletonState is null)
+                return;
+
+            var skeletonRoot = skeletonState.Root;
+            int skeletonVertexCount = skeletonState.VertexCount;
             scatter.PrepareReadValue<Vector2>(RotationAddress); // Rotation
-            scatter.PrepareReadArray<TrsX>(skeletonRoot.VerticesAddr, skeletonRoot.Count); // ESP Vertices
+            scatter.PrepareReadArray<TrsX>(skeletonRoot.VerticesAddr, skeletonVertexCount); // Skeleton vertices
 
             scatter.Completed += (sender, s) =>
             {
+                if (Memory.Game?.InRaid != true)
+                    return;
+
                 bool successRot = false;
                 bool successPos = false;
                 if (s.ReadValue<Vector2>(RotationAddress, out var rotation))
                     successRot = SetRotation(rotation);
 
-                if (s.ReadPooled<TrsX>(skeletonRoot.VerticesAddr, skeletonRoot.Count) is IMemoryOwner<TrsX> vertices)
+                if (s.ReadPooled<TrsX>(skeletonRoot.VerticesAddr, skeletonVertexCount) is IMemoryOwner<TrsX> vertices)
                 {
                     using (vertices)
                     {
                         try
                         {
-                            _ = skeletonRoot.UpdatePosition(vertices.Memory.Span);
+                            foreach (var bone in _trackedSkeletonBones)
+                                _ = skeletonState.Transforms[(int)bone].UpdatePosition(vertices.Memory.Span);
                             successPos = true;
                         }
                         catch (Exception ex) // Attempt to re-allocate Transform on error
                         {
-                            TryRefreshSkeletonRoot(ex);
+                            TryRefreshSkeletonRoot(skeletonState, ex);
                         }
                     }
                 }
@@ -451,12 +558,18 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
             };
         }
 
-        private void TryRefreshSkeletonRoot(Exception positionEx)
+        private void TryRefreshSkeletonRoot(SkeletonState expectedState, Exception positionEx)
         {
+            if (!ReferenceEquals(Volatile.Read(ref _skeletonState), expectedState) ||
+                Memory.Game?.InRaid != true)
+            {
+                return;
+            }
+
             try
             {
-                var transformInternal = SkeletonRoot.TransformInternal;
-                SkeletonRoot = new UnityTransform(transformInternal);
+                if (!RefreshSkeletonTransforms(expectedState))
+                    return;
             }
             catch (Exception refreshEx)
             {
@@ -475,6 +588,35 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
             }
         }
 
+        private bool RefreshSkeletonTransforms(SkeletonState expectedState)
+        {
+            var transforms = new UnityTransform[expectedState.Transforms.Length];
+            ulong verticesAddr = 0;
+            int vertexCount = 0;
+
+            foreach (var bone in _trackedSkeletonBones)
+            {
+                var existing = expectedState.Transforms[(int)bone];
+                var transform = new UnityTransform(existing.TransformInternal);
+
+                if (verticesAddr == 0)
+                    verticesAddr = transform.VerticesAddr;
+                else if (verticesAddr != transform.VerticesAddr)
+                    throw new InvalidOperationException("Player bones do not share one transform hierarchy.");
+
+                transforms[(int)bone] = transform;
+                vertexCount = Math.Max(vertexCount, transform.Count);
+            }
+
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(
+                vertexCount, MAX_PLAYER_SKELETON_VERTEX_COUNT, nameof(vertexCount));
+
+            var replacement = new SkeletonState(transforms, vertexCount);
+            return ReferenceEquals(
+                Interlocked.CompareExchange(ref _skeletonState, replacement, expectedState),
+                expectedState);
+        }
+
         /// <summary>
         /// Executed on each Transform Validation Loop.
         /// </summary>
@@ -482,21 +624,29 @@ namespace LoneEftDmaRadar.Tarkov.World.Player
         /// <param nickName="round2">Index (round 2)</param>
         public virtual void OnValidateTransforms(VmmScatter round1, VmmScatter round2)
         {
-            round1.PrepareReadPtr(SkeletonRoot.TransformInternal + UnityOffsets.TransformAccess_HierarchyOffset); // Bone Hierarchy
+            var skeletonState = Volatile.Read(ref _skeletonState);
+            if (skeletonState is null)
+                return;
+
+            var skeletonRoot = skeletonState.Root;
+            uint hierarchyOffset = UnityTransform.TransformAccessHierarchyOffset;
+            uint verticesOffset = UnityTransform.HierarchyVerticesOffset;
+            round1.PrepareReadPtr(skeletonRoot.TransformInternal + hierarchyOffset); // Bone Hierarchy
             round1.Completed += (sender, x1) =>
             {
-                if (x1.ReadPtr(SkeletonRoot.TransformInternal + UnityOffsets.TransformAccess_HierarchyOffset, out var tra))
+                if (x1.ReadPtr(skeletonRoot.TransformInternal + hierarchyOffset, out var tra))
                 {
-                    round2.PrepareReadPtr(tra + UnityOffsets.Hierarchy_VerticesOffset); // Vertices Ptr
+                    round2.PrepareReadPtr(tra + verticesOffset); // Vertices Ptr
                     round2.Completed += (sender, x2) =>
                     {
-                        if (x2.ReadPtr(tra + UnityOffsets.Hierarchy_VerticesOffset, out var verticesPtr))
+                        if (x2.ReadPtr(tra + verticesOffset, out var verticesPtr))
                         {
-                            if (SkeletonRoot.VerticesAddr != verticesPtr) // check if any addr changed
+                            if (skeletonRoot.VerticesAddr != verticesPtr &&
+                                ReferenceEquals(Volatile.Read(ref _skeletonState), skeletonState) &&
+                                Memory.Game?.InRaid == true) // check if any addr changed
                             {
                                 Logging.WriteLine($"WARNING - SkeletonRoot Transform has changed for Player '{Name}'");
-                                var transform = new UnityTransform(SkeletonRoot.TransformInternal);
-                                SkeletonRoot = transform;
+                                _ = RefreshSkeletonTransforms(skeletonState);
                             }
                         }
                     };

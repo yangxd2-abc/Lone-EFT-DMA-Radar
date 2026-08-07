@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lone EFT DMA Radar - Standalone HTML Prototypes</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101317;
+      --panel: #171b21;
+      --panel-2: #1e242c;
+      --line: #303844;
+      --text: #e6edf3;
+      --muted: #93a1af;
+      --accent: #4fb7c5;
+      --good: #61d36f;
+      --warn: #e7bc48;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 "Segoe UI", Arial, sans-serif;
+    }
+    main {
+      width: min(980px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0;
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; font-weight: 650; }
+    p { margin: 0 0 22px; color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    a.card {
+      display: block;
+      min-height: 150px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: inherit;
+      text-decoration: none;
+    }
+    a.card:hover { border-color: var(--accent); background: var(--panel-2); }
+    .kicker { color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    h2 { margin: 10px 0 8px; font-size: 18px; }
+    .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+    .pill {
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Lone EFT DMA Radar - Local HTML Prototypes</h1>
+    <p>Small standalone pages patterned after the app's ImGui radar, widgets, settings, and web-radar panels. No build step, no server, no external assets.</p>
+    <section class="grid" aria-label="Prototype links">
+      <a class="card" href="radar-overview.html">
+        <span class="kicker">Main Window</span>
+        <h2>Radar Overview</h2>
+        <p>Top menu, map follow/free toggle, status, map entities, and compact overlay widgets.</p>
+        <div class="meta"><span class="pill">canvas</span><span class="pill">menu bar</span><span class="pill">mock raid</span></div>
+      </a>
+      <a class="card" href="loot-widget.html">
+        <span class="kicker">Widget</span>
+        <h2>Loot Widget</h2>
+        <p>Searchable, sortable loot list plus options matching the in-app loot tab behavior.</p>
+        <div class="meta"><span class="pill">tabs</span><span class="pill">table</span><span class="pill">filters</span></div>
+      </a>
+      <a class="card" href="settings-panel.html">
+        <span class="kicker">Panel</span>
+        <h2>Settings Panel</h2>
+        <p>General, Players, Loot, Containers, Quest Helper, and About tabs in a compact control panel.</p>
+        <div class="meta"><span class="pill">sliders</span><span class="pill">checkboxes</span><span class="pill">tabs</span></div>
+      </a>
+      <a class="card" href="web-radar-panel.html">
+        <span class="kicker">Panel</span>
+        <h2>Web Radar Panel</h2>
+        <p>Local mock of bind address, port, tick rate, UPnP, password, and generated share URL.</p>
+        <div class="meta"><span class="pill">form</span><span class="pill">state</span><span class="pill">offline</span></div>
+      </a>
+    </section>
+  </main>
+</body>
+</html>

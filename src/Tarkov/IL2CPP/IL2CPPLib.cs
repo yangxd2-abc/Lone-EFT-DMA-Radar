@@ -127,25 +127,41 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP
 
         private static void Resolve_TypeInfoDefinitionTable(ref Vmm.ModuleEntry module)
         {
+            // The dumper has already resolved or restored the current RVA before this
+            // SDK is initialized. Prefer that verified value and only scan when it is
+            // unavailable, since the legacy local signature changes frequently.
             try
             {
-                ulong sig = _vmm.FindSignature(_pid, IL2CPPOffsets.TypeInfoDefinitionTableSig, module.vaBase, module.vaBase + module.cbImageSize);
-                sig.ThrowIfInvalidUserVA(nameof(sig));
-
-                int disp32 = Memory.ReadValue<int>(sig + 3);
-                ulong typeDefPtrAddr = sig.AddRVA(3 + 4, disp32);
-                gTypeInfoDefinitionTable = Memory.ReadValue<ulong>(typeDefPtrAddr);
-                gTypeInfoDefinitionTable.ThrowIfInvalidUserVA(nameof(gTypeInfoDefinitionTable));
-            }
-            catch (Exception ex)
-            {
-                // Local sig failed. Fall back to Offsets.Special.TypeInfoTableRva — the IL2CPP
-                // dumper resolves this dynamically via three additional sig patterns before
-                // IL2CPPLib.Init runs, so it's typically valid even when the local sig is stale.
-                Logging.WriteLine($"Signature scan failed for TypeInfoDefinitionTable: {ex}. Falling back to dumper-resolved RVA 0x{Offsets.Special.TypeInfoTableRva:X}.");
                 ulong staticOffset = module.vaBase + Offsets.Special.TypeInfoTableRva;
                 gTypeInfoDefinitionTable = Memory.ReadValue<ulong>(staticOffset);
                 gTypeInfoDefinitionTable.ThrowIfInvalidUserVA(nameof(gTypeInfoDefinitionTable));
+            }
+            catch (Exception rvaException)
+            {
+                try
+                {
+                    ulong sig = _vmm.FindSignature(
+                        _pid,
+                        IL2CPPOffsets.TypeInfoDefinitionTableSig,
+                        module.vaBase,
+                        module.vaBase + module.cbImageSize);
+                    sig.ThrowIfInvalidUserVA(nameof(sig));
+
+                    int disp32 = Memory.ReadValue<int>(sig + 3);
+                    ulong typeDefPtrAddr = sig.AddRVA(3 + 4, disp32);
+                    gTypeInfoDefinitionTable = Memory.ReadValue<ulong>(typeDefPtrAddr);
+                    gTypeInfoDefinitionTable.ThrowIfInvalidUserVA(nameof(gTypeInfoDefinitionTable));
+                    Logging.WriteLine(
+                        $"TypeInfoDefinitionTable RVA 0x{Offsets.Special.TypeInfoTableRva:X} " +
+                        "was unavailable; resolved via signature scan.");
+                }
+                catch (Exception signatureException)
+                {
+                    throw new InvalidOperationException(
+                        $"Unable to resolve TypeInfoDefinitionTable using RVA " +
+                        $"0x{Offsets.Special.TypeInfoTableRva:X} or signature scan.",
+                        new AggregateException(rvaException, signatureException));
+                }
             }
             gTypeCount = Memory.ReadValue<int>(gTypeInfoDefinitionTable - 0x10) / 8;
             ArgumentOutOfRangeException.ThrowIfLessThan(gTypeCount, 1, nameof(gTypeCount));

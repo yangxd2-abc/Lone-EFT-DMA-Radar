@@ -45,12 +45,12 @@ namespace LoneEftDmaRadar.Tarkov.World.Explosives
         /// <summary>
         /// Get the updated Position of this Grenade.
         /// </summary>
-        public void OnRefresh(VmmScatter scatter)
+        public bool OnRefresh(VmmScatter scatter)
         {
             if (_isSmoke)
             {
                 // Smokes never leave the list, don't remove
-                return;
+                return false;
             }
             scatter.PrepareReadValue<bool>(this + Offsets.Throwable._isDestroyed);
             scatter.PrepareReadArray<UnityTransform.TrsX>(_transform.VerticesAddr, _transform.Count);
@@ -70,6 +70,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Explosives
                     }
                 }
             };
+            return true;
         }
 
         #region Interfaces

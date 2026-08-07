@@ -30,7 +30,7 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
         /// makes previously-cached values wrong (e.g. switching which IL2CPP field
         /// a C# offset is sourced from). Older caches are discarded automatically.
         /// </summary>
-        private const int CacheSchemaVersion = 2;
+        private const int CacheSchemaVersion = 3;
 
         /// <summary>
         /// Radar assembly ModuleVersionId — changes on every rebuild. Used to invalidate
@@ -95,7 +95,10 @@ namespace LoneEftDmaRadar.Tarkov.IL2CPP.Dumper
                 {
                     var json = File.ReadAllText(path);
                     var cache = JsonSerializer.Deserialize(json, CacheJsonContext.Default.OffsetCache);
-                    if (cache is not null && cache.Fields.Count > 0 && cache.SchemaVersion >= CacheSchemaVersion)
+                    if (cache is not null &&
+                        cache.Fields.Count > 0 &&
+                        cache.SchemaVersion >= CacheSchemaVersion &&
+                        cache.RadarAssemblyMvid == RadarAssemblyMvid)
                     {
                         sourcePath = path;
                         return cache;

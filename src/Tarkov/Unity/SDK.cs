@@ -23,6 +23,12 @@ namespace SDK
         public const uint Hierarchy_VerticesOffset = 0x68;
         public const uint Hierarchy_IndicesOffset = 0x40;
 
+        public const uint AllCameras = 0x19F3080;
+        public const uint Camera_ViewMatrix = 0x128;
+        public const uint Camera_FOV = 0x1A8;
+        public const uint Camera_AspectRatio = 0x518;
+        public const uint Camera_IsAddedOffset = 0x35;
+
         public static readonly uint[] GameWorldChain =
         [
             GameObject_ComponentsOffset,

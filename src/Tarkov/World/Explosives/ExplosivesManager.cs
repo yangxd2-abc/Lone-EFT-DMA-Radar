@@ -32,19 +32,23 @@ namespace LoneEftDmaRadar.Tarkov.World.Explosives
                 return;
             }
             using var scatter = Memory.CreateScatter(VmmSharpEx.Options.VmmFlags.NOCACHE);
+            bool hasPreparedReads = false;
             foreach (var explosive in explosives)
             {
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    explosive.OnRefresh(scatter);
+                    hasPreparedReads |= explosive.OnRefresh(scatter);
                 }
                 catch (Exception ex)
                 {
                     Logging.WriteLine($"Error Refreshing Explosive @ 0x{explosive.Addr.ToString("X")}: {ex}");
                 }
             }
-            scatter.Execute();
+            if (hasPreparedReads)
+            {
+                scatter.Execute();
+            }
         }
 
         private void GetGrenades(CancellationToken ct)

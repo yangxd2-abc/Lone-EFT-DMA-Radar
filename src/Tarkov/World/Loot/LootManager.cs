@@ -21,6 +21,21 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
         private readonly HashSet<string> _loggedQuestItems = new(StringComparer.OrdinalIgnoreCase);
         private RateLimiter _refreshErrorRateLimit = new(TimeSpan.FromSeconds(5));
         private RateLimiter _scatterFallbackRateLimit = new(TimeSpan.FromSeconds(10));
+        private RateLimiter _sequentialErrorRateLimit = new(TimeSpan.FromSeconds(10));
+        private RateLimiter _unrecognizedClassRateLimit = new(TimeSpan.FromSeconds(10));
+        private RateLimiter _lootSummaryRateLimit = new(TimeSpan.FromSeconds(10));
+        private static int _managedPositionFallbackLogged;
+        // The current IL2CPP layout exposes stable managed position fields for loot,
+        // while the legacy native Component/GameObject scatter chain is no longer valid.
+        // Start on the verified managed path instead of failing one scatter batch per raid.
+        private bool _useSequentialLootReads = true;
+        private static readonly object _nativeLayoutSync = new();
+        private static int _nativeLayoutScanStarted;
+        private static NativeLootLayout _nativeLayout = new(
+            UnityOffsets.Component_GameObjectOffset,
+            UnityOffsets.GameObject_ComponentsOffset,
+            0x8,
+            UnityOffsets.GameObject_NameOffset);
 
         /// <summary>
         /// All loot (with filter applied).
@@ -107,6 +122,12 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                 {
                     _ = _loot.TryRemove(existing, out _);
                 }
+            }
+            if (_useSequentialLootReads)
+            {
+                RefreshLootSequential(lootListHs, ct);
+                SyncCorpses();
+                return;
             }
             // Proceed to get new loot
             using var map = Memory.CreateScatterMap();
@@ -204,6 +225,7 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                 }
                 catch (Exception ex)
                 {
+                    _useSequentialLootReads = true;
                     if (_scatterFallbackRateLimit.TryEnter())
                         Logging.WriteLine($"[LootManager] Scatter loot refresh failed for {scatterLootCount} new loot entries; falling back to sequential reads: {ex.Message}");
                     RefreshLootSequential(lootListHs, ct);
@@ -211,6 +233,11 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
             }
 
             // Post Scatter Read - Sync Corpses
+            SyncCorpses();
+        }
+
+        private void SyncCorpses()
+        {
             var deadPlayers = Memory.Players?
                 .Where(x => x.Corpse is not null)?.ToList();
             foreach (var corpse in _loot.Values.OfType<LootCorpse>())
@@ -224,38 +251,411 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
         /// </summary>
         private void RefreshLootSequential(IEnumerable<ulong> lootList, CancellationToken ct)
         {
+            int candidates = 0;
+            int recognized = 0;
+            int validPositions = 0;
+            int managedPositions = 0;
+            int transformPositions = 0;
+            int added = 0;
+            int failures = 0;
             foreach (var lootBase in lootList)
             {
                 ct.ThrowIfCancellationRequested();
                 if (_loot.ContainsKey(lootBase) || !lootBase.IsValidUserVA())
                     continue;
 
+                candidates++;
+
                 try
                 {
-                    var monoBehaviour = Memory.ReadPtr(lootBase + ObjectClass.MonoBehaviourOffset);
-                    var c1 = Memory.ReadPtr(lootBase + ObjectClass.To_NamePtr[0]);
-                    var interactiveClass = Memory.ReadPtr(monoBehaviour + UnityOffsets.Component_ObjectClassOffset);
-                    var gameObject = Memory.ReadPtr(monoBehaviour + UnityOffsets.Component_GameObjectOffset);
-                    var classNamePtr = Memory.ReadPtr(c1 + ObjectClass.To_NamePtr[1]);
-                    var className = Memory.ReadUtf8String(classNamePtr, 64);
-                    var components = Memory.ReadPtr(gameObject + UnityOffsets.GameObject_ComponentsOffset);
-                    var pGameObjectName = Memory.ReadPtr(gameObject + UnityOffsets.GameObject_NameOffset);
-                    var objectName = Memory.ReadUtf8String(pGameObjectName, 64);
-                    var transformInternal = Memory.ReadPtr(components + 0x8);
+                    var monoBehaviour = Memory.ReadPtr(
+                        lootBase + ObjectClass.MonoBehaviourOffset,
+                        false);
+                    var interactiveClass = Memory.ReadPtr(
+                        monoBehaviour + UnityOffsets.Component_ObjectClassOffset,
+                        false);
+                    var className = ObjectClass.ReadName(lootBase, 64, false);
+                    bool isRecognized =
+                        className.Contains("Corpse", StringComparison.OrdinalIgnoreCase) ||
+                        className.Equals("ObservedLootItem", StringComparison.OrdinalIgnoreCase) ||
+                        className.Equals("LootItem", StringComparison.OrdinalIgnoreCase) ||
+                        className.Equals("InteractiveLootItem", StringComparison.OrdinalIgnoreCase) ||
+                        className.Equals("LootableContainer", StringComparison.OrdinalIgnoreCase);
+                    if (isRecognized)
+                        recognized++;
+
+                    string objectName = string.Empty;
+                    Vector3 position;
+                    if (TryReadManagedLootPosition(interactiveClass, className, out position))
+                    {
+                        managedPositions++;
+                    }
+                    else
+                    {
+                        ResolveNativeLootObject(
+                            lootBase,
+                            out objectName,
+                            out var transformInternal);
+                        position = new UnityTransform(transformInternal, false).UpdatePosition();
+                        if (!IsValidLootPosition(position))
+                            continue;
+                        transformPositions++;
+                    }
+
+                    validPositions++;
+
+                    if (Interlocked.Exchange(ref _managedPositionFallbackLogged, 1) == 0)
+                    {
+                        Logging.WriteLine(
+                            "[LootManager] Using managed loot position fields from the current IL2CPP layout.");
+                    }
 
                     var @params = new LootIndexParams
                     {
                         ItemBase = lootBase,
                         InteractiveClass = interactiveClass,
                         ObjectName = objectName,
-                        TransformInternal = transformInternal,
+                        Position = position,
+                        HasPosition = true,
                         ClassName = className
                     };
                     ProcessLootIndex(ref @params);
+                    if (_loot.ContainsKey(lootBase))
+                        added++;
+                }
+                catch (Exception ex)
+                {
+                    failures++;
+                    if (_sequentialErrorRateLimit.TryEnter())
+                    {
+                        Logging.WriteLine(
+                            $"[LootManager] Sequential loot probe failed for 0x{lootBase:X}: " +
+                            $"{ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+            }
+
+            if (candidates > 0 && (_loot.IsEmpty || added > 0) && _lootSummaryRateLimit.TryEnter())
+            {
+                Logging.WriteLine(
+                    $"[LootManager] Sequential scan: candidates={candidates}, " +
+                    $"recognized={recognized}, validPositions={validPositions}, " +
+                    $"managed={managedPositions}, transform={transformPositions}, " +
+                    $"added={added}, total={_loot.Count}, failures={failures}.");
+            }
+        }
+
+        private static bool TryReadManagedLootPosition(
+            ulong lootBase,
+            string className,
+            out Vector3 position)
+        {
+            position = default;
+            try
+            {
+                bool isContainer = className.Equals(
+                    "LootableContainer",
+                    StringComparison.OrdinalIgnoreCase);
+                bool isLootItem =
+                    className.Contains("Corpse", StringComparison.OrdinalIgnoreCase) ||
+                    className.Equals("ObservedLootItem", StringComparison.OrdinalIgnoreCase) ||
+                    className.Equals("LootItem", StringComparison.OrdinalIgnoreCase) ||
+                    className.Equals("InteractiveLootItem", StringComparison.OrdinalIgnoreCase);
+
+                if (isLootItem)
+                {
+                    position = Memory.ReadValue<Vector3>(
+                        lootBase + Offsets.InteractiveLootItem._startPosition,
+                        false);
+                    return IsValidLootPosition(position);
+                }
+
+                if (isContainer)
+                {
+                    position = Memory.ReadValue<Vector3>(
+                        lootBase + Offsets.WorldInteractiveObject.InteractPosition1,
+                        false);
+                    if (IsValidLootPosition(position))
+                        return true;
+
+                    position = Memory.ReadValue<Vector3>(
+                        lootBase + Offsets.WorldInteractiveObject.InteractPosition2,
+                        false);
+                    return IsValidLootPosition(position);
+                }
+            }
+            catch
+            {
+            }
+
+            position = default;
+            return false;
+        }
+
+        private static bool IsValidLootPosition(Vector3 position) =>
+            float.IsFinite(position.X) &&
+            float.IsFinite(position.Y) &&
+            float.IsFinite(position.Z) &&
+            MathF.Abs(position.X) < 10000f &&
+            MathF.Abs(position.Y) < 10000f &&
+            MathF.Abs(position.Z) < 10000f &&
+            position.LengthSquared() > 0.01f;
+
+        private static void ResolveNativeLootObject(
+            ulong managedObject,
+            out string objectName,
+            out ulong transformInternal)
+        {
+            // Use the same complete managed object -> TransformInternal chain used by
+            // grenades and other working Unity objects before attempting layout recovery.
+            try
+            {
+                ulong gameObject = Memory.ReadPtrChain(managedObject, false, ObjectClass.To_GameObject);
+                ulong transform = Memory.ReadPtrChain(managedObject, false, UnityOffsets.TransformChain);
+                _ = new UnityTransform(transform, false);
+                objectName = TryReadObjectName(gameObject, UnityOffsets.GameObject_NameOffset);
+                transformInternal = transform;
+                return;
+            }
+            catch
+            {
+                // Native Unity layouts can change independently; use the resolver below.
+            }
+
+            ulong component = Memory.ReadPtr(managedObject + ObjectClass.MonoBehaviourOffset, false);
+            var layout = _nativeLayout;
+            if (TryReadNativeLootObject(component, layout, out objectName, out transformInternal))
+                return;
+
+            lock (_nativeLayoutSync)
+            {
+                layout = _nativeLayout;
+                if (TryReadNativeLootObject(component, layout, out objectName, out transformInternal))
+                    return;
+
+                if (!TryScanNativeLootLayout(component, out layout, out objectName, out transformInternal))
+                {
+                    throw new InvalidOperationException(
+                        $"Unable to resolve Unity Component/GameObject layout for 0x{managedObject:X}.");
+                }
+
+                _nativeLayout = layout;
+                Logging.WriteLine(
+                    $"[LootManager] Native Unity object layout resolved: " +
+                    $"gameObject=0x{layout.ComponentGameObjectOffset:X}, " +
+                    $"components=0x{layout.GameObjectComponentsOffset:X}, " +
+                    $"transform=0x{layout.ComponentsTransformOffset:X}, " +
+                    $"name=0x{layout.GameObjectNameOffset:X}");
+            }
+        }
+
+        private static bool TryReadNativeLootObject(
+            ulong component,
+            NativeLootLayout layout,
+            out string objectName,
+            out ulong transformInternal)
+        {
+            objectName = string.Empty;
+            transformInternal = 0;
+            try
+            {
+                ulong gameObject = Memory.ReadPtr(component + layout.ComponentGameObjectOffset, false);
+                ulong components = Memory.ReadPtr(gameObject + layout.GameObjectComponentsOffset, false);
+                ulong transformComponent = Memory.ReadPtr(components + layout.ComponentsTransformOffset, false);
+                if (!TryResolveTransformInternal(transformComponent, out ulong transform))
+                    return false;
+
+                objectName = TryReadObjectName(gameObject, layout.GameObjectNameOffset) ?? string.Empty;
+                transformInternal = transform;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryScanNativeLootLayout(
+            ulong component,
+            out NativeLootLayout layout,
+            out string objectName,
+            out ulong transformInternal)
+        {
+            layout = default;
+            objectName = string.Empty;
+            transformInternal = 0;
+
+            const int scanBytes = 0x108;
+            if (Interlocked.Exchange(ref _nativeLayoutScanStarted, 1) == 0)
+            {
+                Logging.WriteLine(
+                    $"[LootManager] Resolving native Unity loot layout from component 0x{component:X}...");
+            }
+            Span<ulong> componentData = stackalloc ulong[scanBytes / sizeof(ulong)];
+            var gameObjectDataBuffer = new ulong[scanBytes / sizeof(ulong)];
+            var componentsDataBuffer = new ulong[0x48 / sizeof(ulong)];
+            try
+            {
+                Memory.ReadSpan(component, componentData, false);
+            }
+            catch
+            {
+                return false;
+            }
+
+            for (int gameObjectSlot = 0; gameObjectSlot < componentData.Length; gameObjectSlot++)
+            {
+                ulong gameObject = componentData[gameObjectSlot];
+                if (!gameObject.IsValidUserVA())
+                    continue;
+
+                Span<ulong> gameObjectData = gameObjectDataBuffer;
+                try
+                {
+                    Memory.ReadSpan(gameObject, gameObjectData, false);
                 }
                 catch
                 {
+                    continue;
                 }
+
+                // A Component contains several native pointers. Verify that a candidate
+                // actually resembles a GameObject before walking all of its component
+                // list candidates; doing this after the nested scan can take minutes via DMA.
+                uint nameOffset = FindGameObjectNameOffset(gameObject, gameObjectData, out var candidateName);
+                if (candidateName.Length == 0)
+                    continue;
+
+                for (int componentsSlot = 0; componentsSlot < gameObjectData.Length; componentsSlot++)
+                {
+                    ulong components = gameObjectData[componentsSlot];
+                    if (!components.IsValidUserVA())
+                        continue;
+
+                    Span<ulong> componentsData = componentsDataBuffer;
+                    try
+                    {
+                        Memory.ReadSpan(components, componentsData, false);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    for (int transformSlot = 0; transformSlot < componentsData.Length; transformSlot++)
+                    {
+                        ulong transformComponent = componentsData[transformSlot];
+                        if (!transformComponent.IsValidUserVA())
+                            continue;
+
+                        if (!TryResolveTransformInternal(transformComponent, out ulong transform))
+                            continue;
+
+                        objectName = candidateName;
+                        layout = new(
+                            (uint)(gameObjectSlot * sizeof(ulong)),
+                            (uint)(componentsSlot * sizeof(ulong)),
+                            (uint)(transformSlot * sizeof(ulong)),
+                            nameOffset);
+                        transformInternal = transform;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryResolveTransformInternal(
+            ulong transformComponent,
+            out ulong transformInternal)
+        {
+            transformInternal = 0;
+            if (!transformComponent.IsValidUserVA())
+                return false;
+
+            // Some Unity layouts expose TransformInternal directly in the component
+            // array, while others expose a native Component that links back through
+            // its ObjectClass and managed MonoBehaviour object.
+            try
+            {
+                _ = new UnityTransform(transformComponent, false);
+                transformInternal = transformComponent;
+                return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                ulong objectClass = Memory.ReadPtr(
+                    transformComponent + UnityOffsets.Component_ObjectClassOffset,
+                    false);
+                ulong candidate = Memory.ReadPtr(
+                    objectClass + ObjectClass.MonoBehaviourOffset,
+                    false);
+                _ = new UnityTransform(candidate, false);
+                transformInternal = candidate;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static uint FindGameObjectNameOffset(
+            ulong gameObject,
+            ReadOnlySpan<ulong> gameObjectData,
+            out string objectName)
+        {
+            objectName = TryReadObjectName(gameObject, UnityOffsets.GameObject_NameOffset) ?? string.Empty;
+            if (objectName.Length != 0)
+                return UnityOffsets.GameObject_NameOffset;
+
+            for (int slot = 0; slot < gameObjectData.Length; slot++)
+            {
+                string candidate = TryReadString(gameObjectData[slot]);
+                if (candidate.Length == 0)
+                    continue;
+
+                objectName = candidate;
+                return (uint)(slot * sizeof(ulong));
+            }
+
+            return UnityOffsets.GameObject_NameOffset;
+        }
+
+        private static string TryReadObjectName(ulong gameObject, uint offset)
+        {
+            try
+            {
+                return TryReadString(Memory.ReadPtr(gameObject + offset, false));
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static string TryReadString(ulong address)
+        {
+            if (!address.IsValidUserVA())
+                return string.Empty;
+            try
+            {
+                string value = Memory.ReadUtf8String(address, 64, false);
+                if (string.IsNullOrWhiteSpace(value) || value.Length >= 64 ||
+                    value.Any(c => char.IsControl(c) && c is not '\t'))
+                {
+                    return string.Empty;
+                }
+                return value;
+            }
+            catch
+            {
+                return string.Empty;
             }
         }
 
@@ -265,7 +665,10 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
         private void ProcessLootIndex(ref LootIndexParams p)
         {
             var isCorpse = p.ClassName.Contains("Corpse", StringComparison.OrdinalIgnoreCase);
-            var isLooseLoot = p.ClassName.Equals("ObservedLootItem", StringComparison.OrdinalIgnoreCase);
+            var isLooseLoot =
+                p.ClassName.Equals("ObservedLootItem", StringComparison.OrdinalIgnoreCase) ||
+                p.ClassName.Equals("LootItem", StringComparison.OrdinalIgnoreCase) ||
+                p.ClassName.Equals("InteractiveLootItem", StringComparison.OrdinalIgnoreCase);
             var isContainer = p.ClassName.Equals("LootableContainer", StringComparison.OrdinalIgnoreCase);
             var interactiveClass = p.InteractiveClass;
 
@@ -276,7 +679,9 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
             else
             {
                 // Get Item Position
-                var pos = new UnityTransform(p.TransformInternal, true).UpdatePosition();
+                var pos = p.HasPosition
+                    ? p.Position
+                    : new UnityTransform(p.TransformInternal, false).UpdatePosition();
                 if (isCorpse)
                 {
                     var corpse = new LootCorpse(interactiveClass, pos);
@@ -335,6 +740,12 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
                         }
                     }
                 }
+                else if (_unrecognizedClassRateLimit.TryEnter())
+                {
+                    Logging.WriteLine(
+                        $"[LootManager] Ignoring unrecognized loot class '{p.ClassName}' " +
+                        $"(object '{p.ObjectName}', base=0x{p.ItemBase:X}).");
+                }
             }
         }
 
@@ -344,8 +755,16 @@ namespace LoneEftDmaRadar.Tarkov.World.Loot
             public ulong InteractiveClass { get; init; }
             public string ObjectName { get; init; }
             public ulong TransformInternal { get; init; }
+            public Vector3 Position { get; init; }
+            public bool HasPosition { get; init; }
             public string ClassName { get; init; }
         }
+
+        private readonly record struct NativeLootLayout(
+            uint ComponentGameObjectOffset,
+            uint GameObjectComponentsOffset,
+            uint ComponentsTransformOffset,
+            uint GameObjectNameOffset);
 
         #endregion
 

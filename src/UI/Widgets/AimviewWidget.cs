@@ -3,6 +3,7 @@
  * Licensed under GNU AGPLv3. See https://www.gnu.org/licenses/agpl-3.0.html
  */
 using ImGuiNET;
+using LoneEftDmaRadar.Tarkov.Unity.Structures;
 using LoneEftDmaRadar.Tarkov.World.Loot;
 using LoneEftDmaRadar.Tarkov.World.Player;
 using LoneEftDmaRadar.Tarkov.World.Player.Helpers;
@@ -20,6 +21,66 @@ namespace LoneEftDmaRadar.UI.Widgets
         public const float AimviewBaseStrokeSize = 1.33f;
         private const float LOOT_RENDER_DISTANCE = 10f;
         private const float CONTAINER_RENDER_DISTANCE = 10f;
+
+        private enum StickPoint
+        {
+            Pelvis,
+            Spine1,
+            Spine2,
+            Spine3,
+            Neck,
+            Head,
+            LeftCollar,
+            LeftElbow,
+            LeftHand,
+            RightCollar,
+            RightElbow,
+            RightHand,
+            LeftKnee,
+            LeftFoot,
+            RightKnee,
+            RightFoot,
+            Count
+        }
+
+        private static readonly Bones[] StickFigureBones =
+        [
+            Bones.HumanPelvis,
+            Bones.HumanSpine1,
+            Bones.HumanSpine2,
+            Bones.HumanSpine3,
+            Bones.HumanNeck,
+            Bones.HumanHead,
+            Bones.HumanLCollarbone,
+            Bones.HumanLForearm2,
+            Bones.HumanLPalm,
+            Bones.HumanRCollarbone,
+            Bones.HumanRForearm2,
+            Bones.HumanRPalm,
+            Bones.HumanLThigh2,
+            Bones.HumanLFoot,
+            Bones.HumanRThigh2,
+            Bones.HumanRFoot
+        ];
+
+        private sealed class StickFigureScreenCache
+        {
+            public readonly SKPoint[] Points = new SKPoint[(int)StickPoint.Count];
+            public readonly bool[] Valid = new bool[(int)StickPoint.Count];
+            public int Width;
+            public int Height;
+            public float Zoom;
+
+            public void Reset(int width, int height, float zoom)
+            {
+                Array.Clear(Valid);
+                Width = width;
+                Height = height;
+                Zoom = zoom;
+            }
+        }
+
+        private static readonly ConditionalWeakTable<AbstractPlayer, StickFigureScreenCache> StickFigureCaches = new();
 
         private static GL _gl;
         private static GRContext _grContext;
@@ -148,6 +209,20 @@ namespace LoneEftDmaRadar.UI.Widgets
             }
             IsOpen = isOpen;
 
+            float viewZoom = Math.Clamp(Program.Config.AimviewWidget.PlayerScale, 10f, 100f);
+            if (ImGui.SliderFloat("View Zoom", ref viewZoom, 10f, 100f, "%.0f", ImGuiSliderFlags.Logarithmic))
+                Program.Config.AimviewWidget.PlayerScale = viewZoom;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("10 = native game view, 100 = 10x screen zoom");
+
+            float skeletonWidth = Math.Clamp(Program.Config.AimviewWidget.SkeletonStrokeWidth, 0.5f, 6f);
+            if (ImGui.SliderFloat("Skeleton Width", ref skeletonWidth, 0.5f, 6f, "%.1f px"))
+                Program.Config.AimviewWidget.SkeletonStrokeWidth = skeletonWidth;
+
+            float crosshairWidth = Math.Clamp(Program.Config.AimviewWidget.CrosshairStrokeWidth, 0.5f, 6f);
+            if (ImGui.SliderFloat("Crosshair Width", ref crosshairWidth, 0.5f, 6f, "%.1f px"))
+                Program.Config.AimviewWidget.CrosshairStrokeWidth = crosshairWidth;
+
             // Get the size of the content region
             var avail = ImGui.GetContentRegionAvail();
             int width = Math.Max(64, (int)avail.X);
@@ -210,22 +285,112 @@ namespace LoneEftDmaRadar.UI.Widgets
             if (players is null)
                 return;
 
-            const float minRadius = 1.5f;
-            const float maxRadius = 12f;
+            float strokeWidth = Math.Clamp(Program.Config.AimviewWidget.SkeletonStrokeWidth, 0.5f, 6f);
 
             foreach (var player in players)
             {
-                if (WorldToScreen(in player.Position, width, height, out var screen))
-                {
-                    float distance = Vector3.Distance(localPlayer.LookPosition, player.Position);
-                    if (distance > Program.Config.UI.MaxDistance)
-                        continue;
+                float distance = Vector3.Distance(localPlayer.LookPosition, player.Position);
+                if (distance > Program.Config.UI.MaxDistance)
+                    continue;
 
-                    float radius = Math.Clamp(maxRadius - MathF.Sqrt(distance) * 0.65f, minRadius, maxRadius);
-
-                    canvas.DrawCircle(screen, radius, GetPaint(player));
-                }
+                var playerPaint = GetPaint(player);
+                playerPaint.Style = SKPaintStyle.Stroke;
+                playerPaint.StrokeWidth = strokeWidth;
+                playerPaint.StrokeCap = SKStrokeCap.Round;
+                playerPaint.StrokeJoin = SKStrokeJoin.Round;
+                playerPaint.IsAntialias = true;
+                DrawStickFigure(canvas, player, width, height, playerPaint);
             }
+        }
+
+        /// <summary>
+        /// Draws the player's current DMA-backed skeleton pose.
+        /// </summary>
+        private static void DrawStickFigure(
+            SKCanvas canvas,
+            AbstractPlayer player,
+            int width,
+            int height,
+            SKPaint playerPaint)
+        {
+            Span<SKPoint> points = stackalloc SKPoint[(int)StickPoint.Count];
+            float zoom = GetViewZoom();
+            var cache = StickFigureCaches.GetOrCreateValue(player);
+            if (cache.Width != width || cache.Height != height || MathF.Abs(cache.Zoom - zoom) > 0.001f)
+                cache.Reset(width, height, zoom);
+
+            int anchorIndex = (int)StickPoint.Spine2;
+            if (player.TryGetBonePosition(StickFigureBones[anchorIndex], out var anchorWorld) &&
+                ProjectWorldPoint(in anchorWorld, width, height, out var anchorPoint))
+            {
+                cache.Points[anchorIndex] = anchorPoint;
+                cache.Valid[anchorIndex] = true;
+            }
+            else if (!cache.Valid[anchorIndex])
+            {
+                return;
+            }
+
+            points[anchorIndex] = cache.Points[anchorIndex];
+
+            for (int i = 0; i < StickFigureBones.Length; i++)
+            {
+                if (i == anchorIndex)
+                    continue;
+
+                if (player.TryGetBonePosition(StickFigureBones[i], out var boneWorld) &&
+                    ProjectWorldPoint(in boneWorld, width, height, out var point))
+                {
+                    cache.Points[i] = point;
+                    cache.Valid[i] = true;
+                }
+
+                points[i] = cache.Valid[i] ? cache.Points[i] : points[anchorIndex];
+            }
+
+            var head = points[(int)StickPoint.Head];
+            var neck = points[(int)StickPoint.Neck];
+            float headNeckDistance = MathF.Sqrt(
+                MathF.Pow(head.X - neck.X, 2f) + MathF.Pow(head.Y - neck.Y, 2f));
+            float headRadius = Math.Clamp(headNeckDistance * 0.45f, 2f, 24f);
+
+            DrawStickFigureLayer(canvas, points, headRadius, playerPaint);
+        }
+
+        private static void DrawStickFigureLayer(
+            SKCanvas canvas,
+            ReadOnlySpan<SKPoint> points,
+            float headRadius,
+            SKPaint paint)
+        {
+            DrawBone(points, StickPoint.Pelvis, StickPoint.Spine1, canvas, paint);
+            DrawBone(points, StickPoint.Spine1, StickPoint.Spine2, canvas, paint);
+            DrawBone(points, StickPoint.Spine2, StickPoint.Spine3, canvas, paint);
+            DrawBone(points, StickPoint.Spine3, StickPoint.Neck, canvas, paint);
+            DrawBone(points, StickPoint.Neck, StickPoint.Head, canvas, paint);
+
+            DrawBone(points, StickPoint.LeftCollar, StickPoint.LeftElbow, canvas, paint);
+            DrawBone(points, StickPoint.LeftElbow, StickPoint.LeftHand, canvas, paint);
+            DrawBone(points, StickPoint.RightCollar, StickPoint.RightElbow, canvas, paint);
+            DrawBone(points, StickPoint.RightElbow, StickPoint.RightHand, canvas, paint);
+
+            DrawBone(points, StickPoint.Pelvis, StickPoint.LeftKnee, canvas, paint);
+            DrawBone(points, StickPoint.LeftKnee, StickPoint.LeftFoot, canvas, paint);
+            DrawBone(points, StickPoint.Pelvis, StickPoint.RightKnee, canvas, paint);
+            DrawBone(points, StickPoint.RightKnee, StickPoint.RightFoot, canvas, paint);
+
+            canvas.DrawCircle(points[(int)StickPoint.Head], headRadius, paint);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void DrawBone(
+            ReadOnlySpan<SKPoint> points,
+            StickPoint start,
+            StickPoint end,
+            SKCanvas canvas,
+            SKPaint paint)
+        {
+            canvas.DrawLine(points[(int)start], points[(int)end], paint);
         }
 
         private static void DrawLoot(SKCanvas canvas, LocalPlayer localPlayer, int width, int height)
@@ -288,9 +453,12 @@ namespace LoneEftDmaRadar.UI.Widgets
         {
             float centerX = width / 2f;
             float centerY = height / 2f;
+            var paint = SKPaints.PaintAimviewWidgetCrosshair;
+            paint.StrokeWidth = Math.Clamp(Program.Config.AimviewWidget.CrosshairStrokeWidth, 0.5f, 6f);
+            paint.IsAntialias = true;
 
-            canvas.DrawLine(0, centerY, width, centerY, SKPaints.PaintAimviewWidgetCrosshair);
-            canvas.DrawLine(centerX, 0, centerX, height, SKPaints.PaintAimviewWidgetCrosshair);
+            canvas.DrawLine(0, centerY, width, centerY, paint);
+            canvas.DrawLine(centerX, 0, centerX, height, paint);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -315,6 +483,14 @@ namespace LoneEftDmaRadar.UI.Widgets
 
         private static bool WorldToScreen(in Vector3 world, int width, int height, out SKPoint scr)
         {
+            if (!ProjectWorldPoint(in world, width, height, out scr))
+                return false;
+
+            return !(scr.X < 0 || scr.X > width || scr.Y < 0 || scr.Y > height);
+        }
+
+        private static bool ProjectWorldPoint(in Vector3 world, int width, int height, out SKPoint scr)
+        {
             scr = default;
 
             var dir = world - _camPos;
@@ -337,7 +513,23 @@ namespace LoneEftDmaRadar.UI.Widgets
             scr.X = width * 0.5f + nx * (width * 0.5f);
             scr.Y = height * 0.5f - ny * (height * 0.5f);
 
-            return !(scr.X < 0 || scr.X > width || scr.Y < 0 || scr.Y > height);
+            ApplyViewZoom(ref scr, width, height);
+
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float GetViewZoom() =>
+            Math.Clamp(Program.Config.AimviewWidget.PlayerScale, 10f, 100f) / 10f;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ApplyViewZoom(ref SKPoint point, int width, int height)
+        {
+            float zoom = GetViewZoom();
+            float centerX = width * 0.5f;
+            float centerY = height * 0.5f;
+            point.X = centerX + (point.X - centerX) * zoom;
+            point.Y = centerY + (point.Y - centerY) * zoom;
         }
 
         #endregion
